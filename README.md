@@ -53,3 +53,18 @@ Design rationale: `docs/adr/`. Vocabulary: `GLOSSARY.md`.
 ```sh
 bun run smoke   # spawns server on :3999 with seeded FX rates, runs full API flow
 ```
+
+## Deploy (jia-server)
+
+Deployed as Docker on `jia-server`, managed by `/usr/local/bin/server`:
+
+```sh
+server wts status    # app/version/CPU + public URL health
+server wts update    # pull + build + apply (backs up data.db first)
+server wts backup    # VACUUM INTO snapshot into ~/wts/data/backups/
+server wts public on # start cloudflared (needs TUNNEL_TOKEN in ~/wts/.env)
+```
+
+Layout: repo at `~/wts`, SQLite at `~/wts/data/data.db` (bind-mounted into the container), backups in `~/wts/data/backups/` (keeps 10). Ports: `127.0.0.1`, tailnet `100.127.5.96`, LAN `192.168.8.208` — all on `:8081`.
+
+Going public needs one-time Cloudflare steps: create a tunnel, add a public hostname pointing at `http://wts-server:8081`, paste `TUNNEL_TOKEN` into `~/wts/.env`, set `BASE_URL=https://<hostname>` in the same file, then `server wts public on`.
