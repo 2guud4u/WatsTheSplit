@@ -1,0 +1,59 @@
+services:
+  wts:
+    # Built by 'server wts update' from committed files only (git archive),
+    # stamped with a wts.revision label. No build: section on purpose, so
+    # compose never builds from the working tree.
+    image: wts-server
+    container_name: wts-server
+    ports:
+      # Tailnet + LAN only — public traffic arrives via the wts tunnel.
+      - "100.127.5.96:8081:8081"
+      - "192.168.8.208:8081:8081"
+    environment:
+      - PORT=8081
+      - DB_PATH=/data/data.db
+      # BASE_URL=https://your.domain   <- set in .env once the tunnel exists
+      # GOOGLE_CLIENT_ID=...           <- optional sign-in
+      # OXR_APP_ID=...                 <- Open Exchange Rates key (empty = Frankfurter daily)
+    env_file:
+      - .env
+    volumes:
+      # SQLite data.db lives on the host at /opt/wts/data.db.
+      - /opt/wts/data:/data
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 512m
+    cpus: "1.5"
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  cloudflared:
+    # Public entry for WatsTheSplit. OFF by default: only runs when the
+    # "public" profile is requested. Needs TUNNEL_TOKEN in .env.
+    profiles: [public]
+    image: cloudflare/cloudflared:2026.9.3
+    container_name: wts-tunnel
+    command: tunnel --no-autoupdate run
+    env_file: .env            # TUNNEL_TOKEN=... (chmod 600, gitignored)
+    depends_on: [wts]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
