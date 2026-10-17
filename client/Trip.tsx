@@ -93,6 +93,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
     !localStorage.getItem(`wts_fun_notice_${token}`));
   const [showSettings, setShowSettings] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
+  const [showSignIn, setShowSignIn] = useState(false);
   const [settleFrom, settleTo] = [settle.from, settle.to];
 
   const load = useCallback(async () => {
@@ -239,10 +240,21 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
       </p>
       <div className="row" style={{ marginBottom: 12 }}>
         <span className="member-chip"><Avatar name={me.name} /><b>{me.name}</b>{me.linked ? " ✓" : ""}</span>
-        {!me.linked && <span className="muted">not signed in — anyone can claim you</span>}
+        {!me.linked && (
+          <>
+            <span className="muted">not signed in — anyone can claim you</span>
+            <button className="link" onClick={() => setShowSignIn(!showSignIn)}>Sign in</button>
+          </>
+        )}
         <button className="link" onClick={() => setShowInvite(!showInvite)}>Invite</button>
         <button className="link" onClick={() => setShowSettings(!showSettings)}>Settings</button>
       </div>
+
+      {showSignIn && !me.linked && (
+        <div className="card">
+          <SignIn compact onSignedIn={() => { setShowSignIn(false); reloadMe(); load(); }} />
+        </div>
+      )}
 
       {showInvite && (
         <div className="card">
