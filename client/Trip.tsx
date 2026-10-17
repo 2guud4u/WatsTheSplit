@@ -222,7 +222,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
       </div>
       <p className="muted" style={{ marginTop: 0 }}>
         {data.current_rate && t.trip_currency !== t.settle_currency
-          ? `1 ${t.trip_currency} ≈ ${data.current_rate.rate.toPrecision(6)} ${t.settle_currency}`
+          ? `1 ${t.trip_currency} ≈ ${data.current_rate.rate.toPrecision(6)} ${t.settle_currency} · 1 ${t.settle_currency} ≈ ${(1 / data.current_rate.rate).toPrecision(6)} ${t.trip_currency}`
           : t.trip_currency === t.settle_currency ? "same currency — no conversion" : "no exchange rate yet"}
       </p>
       <p className="muted">
