@@ -3,6 +3,7 @@ import qrcode from "qrcode-generator";
 import { api, BASE, Config, toMinor, fmt, fmtUnits, decimals, flag, CATEGORIES } from "./api.ts";
 import { addRecent } from "./main.tsx";
 import { CurrencyPicker } from "./CurrencyPicker.tsx";
+import { Avatar, OweCard, memberName } from "./OweCard.tsx";
 import { SignInButton } from "./SignIn.tsx";
 import { RangePicker } from "./main.tsx";
 import type { DateRange } from "react-day-picker";
@@ -41,19 +42,6 @@ type TripData = {
   fx_timestamp: string | null;
   current_rate: { rate: number; providerTimestamp: string | null } | null;
 };
-
-const AVATAR_COLORS = ["#b56a4c","#7a9b6d","#c9a25e","#8f7fae","#b07575","#7d9aa8","#a08a6e","#6d7f9e"];
-function Avatar({ name }: { name: string }) {
-  let h = 0;
-  for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  return <span className="avatar" style={{ background: AVATAR_COLORS[h % AVATAR_COLORS.length] }}>
-    {name.trim()[0]?.toUpperCase() ?? "?"}
-  </span>;
-}
-
-function memberName(members: Member[], id: string) {
-  return members.find((m) => m.id === id)?.name ?? "?";
-}
 
 function QR({ text }: { text: string }) {
   const url = useMemo(() => {
@@ -318,7 +306,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
           });
           load();
         };
-        const OweCard = ({ p, dir }: { p: { from: string; to: string; amount: number }; dir: "in" | "out" }) => {
+        const Owe = ({ p, dir }: { p: { from: string; to: string; amount: number }; dir: "in" | "out" }) => {
           const other = dir === "in" ? p.from : p.to;
           const m = data.members.find((mm) => mm.id === other);
           const fwd = data.balance_log?.[`${p.from}>${p.to}`] ?? [];
@@ -329,25 +317,13 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
             ...rev.map((en) => ({ ...en, sign: -1 })),
           ];
           return (
-            <div className="owe-card">
-              <Avatar name={m?.name ?? "?"} />
-              <span className="owe-info">
-                <b>{m?.name ?? "?"}</b>
-                <span className={`amt ${dir === "in" ? "net-pos" : "net-neg"}`}>
-                  {fmtUnits(p.amount, t.settle_currency)}
-                </span>
-              </span>
-              <button className="owe-confirm" onClick={async () => { await markPaid(p); }}>
-                ✓ confirm paid
-              </button>
-              {entries.length > 0 && (
-                <button className="math-link" onClick={() => {
+            <>
+              <OweCard name={m?.name ?? "?"} amount={p.amount} currency={t.settle_currency} dir={dir}
+                onConfirm={readOnly ? undefined : async () => { await markPaid(p); }}
+                onDetails={entries.length ? () => {
                   setMathOpen(true);
                   api.post(`/api/trips/${token}/detail-view`).catch(() => {});
-                }}>
-                  details
-                </button>
-              )}
+                } : undefined} />
               {mathOpen && (
                 <div className="modal-bg" onClick={() => setMathOpen(false)}>
                   <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -386,7 +362,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
                   </div>
                 </div>
               )}
-            </div>
+            </>
           );
         };
         return (
@@ -401,23 +377,25 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
               {data.unfinished_count} expense{data.unfinished_count > 1 ? "s are" : " is"} not fully split — open {data.unfinished_count > 1 ? "them" : "it"} before settling.
             </p>
           )}
-          {tab === "owed" && (
+          {!me && <p className="muted">You haven't picked your name yet — showing everyone's balances.</p>}
+          {tab === "owed" && me && (
             oweYou.length === 0
               ? <p className="muted">Nobody owes you.</p>
               : <div className="owe-grid">
-                  {oweYou.map((p) => <OweCard key={p.from} p={p} dir="in" />)}
+                  {oweYou.map((p) => <Owe key={p.from} p={p} dir="in" />)}
                 </div>
           )}
 
-          {tab === "youowe" && (
+          {tab === "youowe" && me && (
             youOwe.length === 0
               ? <p className="muted">You owe nobody.</p>
               : <div className="owe-grid">
-                  {youOwe.map((p) => <OweCard key={p.to} p={p} dir="out" />)}
+                  {youOwe.map((p) => <Owe key={p.to} p={p} dir="out" />)}
                 </div>
           )}
 
-          {tab === "owed" && others.length > 0 && (
+          {(tab === "owed" || !me) && others.length > 0 && (
+            me ? (
             <details className="more">
               <summary>Other pairs</summary>
               {others.map((p) => (
@@ -427,25 +405,35 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
                 </div>
               ))}
             </details>
+            ) : (
+              <div className="owe-grid">
+                {others.map((p) => (
+                  <div key={p.from + p.to} className="expense-row">
+                    <span>{memberName(data.members, p.from)} owes {memberName(data.members, p.to)}</span>
+                    <b>{fmtUnits(p.amount, t.settle_currency)}</b>
+                  </div>
+                ))}
+              </div>
+            )
           )}
 
-          {tab === "owed" && data.settlements.length > 0 && (
+          {data.settlements.length > 0 && (
             <>
               <h2 style={{ marginTop: 16 }}>Recorded payments</h2>
               {data.settlements.map((s) => (
                 <div key={s.id} className="expense-row muted">
                   <span>{memberName(data.members, s.from_member)} paid {memberName(data.members, s.to_member)}</span>
                   <span>{fmt(s.amount_minor, t.settle_currency)}
-                    <button className="link danger" onClick={async () => {
+                    {!readOnly && <button className="link danger" onClick={async () => {
                       await api.del(`/api/settlements/${s.id}`);
-                    }}>✕</button>
+                    }}>✕</button>}
                   </span>
                 </div>
               ))}
             </>
           )}
 
-          {tab === "youowe" && (
+          {tab === "youowe" && !readOnly && (
           <details className="more">
             <summary>Record a custom payment</summary>
             <div className="row">

@@ -364,3 +364,7 @@ details summary { cursor: pointer; padding: 8px 0; }
 .rdp-range_middle { background: color-mix(in srgb, var(--accent) 18%, transparent); }
 .rdp-day_button:hover { background: var(--chip); }
 .modal { max-height: 90vh; overflow-y: auto; }
+
+/* wrapper that disables all expense edit controls for view-only visitors */
+.plain-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.plain-fieldset:disabled { opacity: 0.85; }

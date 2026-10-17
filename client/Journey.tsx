@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { api, BASE, fmtUnits, fmt, flag } from "./api.ts";
 import { useTripEvents } from "./hooks.ts";
 import { CopyButton } from "./CopyButton.tsx";
+import { OweCard } from "./OweCard.tsx";
 
 type TripRef = { token: string; name: string; settle_currency?: string };
 type ExpenseSum = {
@@ -178,12 +179,16 @@ export default function JourneyView({ token }: { token: string }) {
             {rows.length === 0 && mine.size > 0 && (
               <p className="muted">{tab === "owed" ? "Nobody owes you." : "You owe nobody."}</p>
             )}
-            {rows.map((tr, i) => (
-              <div key={i} className="expense-row">
-                <span><b>{tr.from}</b> pays <b>{tr.to}</b></span>
-                <b>{fmtUnits(tr.amount, cur)}</b>
+            {rows.length > 0 && (
+              <div className="owe-grid">
+                {rows.map((tr) => (
+                  <OweCard key={tr.from_key + tr.to_key}
+                    name={tab === "owed" ? tr.from : tr.to}
+                    amount={tr.amount} currency={cur}
+                    dir={tab === "owed" ? "in" : "out"} />
+                ))}
               </div>
-            ))}
+            )}
           </div>
         );
       })()}

@@ -91,8 +91,8 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
   const t = data.trip;
   const dec = decimals(e.currency);
   const partIds = new Set((e.participants ?? []).map((p) => p.member_id));
+  const readOnly = data.access === "view";
   const patch = (b: object) => api.patch(`/api/expenses/${e.id}`, b).then(load);
-
   const slices = (e.effective_shares ?? [])
     .filter((s) => (s.minor ?? 0) > 0)
     .map((s, i) => ({
@@ -108,7 +108,7 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
       </div>
       {e.last_edited_by && <p className="muted">last edited by {e.last_edited_by}</p>}
       {data.access === "view" && (
-        <div className="card"><p className="muted">View only — add yourself on the journey page to edit.</p></div>
+        <div className="card"><p className="muted">View only — <a href={`#/t/${token}`}>pick your name on the trip</a> to edit.</p></div>
       )}
       <div className="row" style={{ margin: "4px 0 12px" }}>
         {e.paid_out
@@ -122,6 +122,7 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
         )}
       </div>
 
+      <fieldset className="plain-fieldset" disabled={readOnly}>
       <div className="card">
         <div className="row">
           <div className="field" style={{ flex: 1 }}>
@@ -324,13 +325,15 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
           ))}
         </div>
       </div>
+      </fieldset>
 
-
-      <button className="danger" onClick={async () => {
-        if (!confirm(`Delete "${e.name}"? This cannot be undone.`)) return;
-        await api.del(`/api/expenses/${e.id}`);
-        location.hash = `#/t/${token}`;
-      }}>Delete expense</button>
+      {data.access === "edit" && (
+        <button className="danger" onClick={async () => {
+          if (!confirm(`Delete "${e.name}"? This cannot be undone.`)) return;
+          await api.del(`/api/expenses/${e.id}`);
+          location.hash = `#/t/${token}`;
+        }}>Delete expense</button>
+      )}
     </>
   );
 }
