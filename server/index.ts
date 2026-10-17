@@ -23,6 +23,7 @@ type Trip = {
   created_at: string;
   password_ver: number; fun_leaderboard: number; created_by_token: string | null;
 };
+type Journey = { token: string; name: string; settle_currency: string; created_at: string };
 
 const json = (data: unknown, init: ResponseInit = {}) =>
   new Response(JSON.stringify(data), {
@@ -35,6 +36,7 @@ const now = () => new Date().toISOString();
 
 const qMember = db.prepare<Member, [string]>("SELECT * FROM members WHERE id = ?");
 const qTrip = db.prepare<Trip, [string]>("SELECT * FROM trips WHERE token = ?");
+const qJourney = db.prepare<Journey, [string]>("SELECT * FROM journeys WHERE token = ?");
 const qSession = db.prepare<Session, [string]>(
   "SELECT token, user_sub FROM sessions WHERE token = ?",
 );
@@ -417,6 +419,141 @@ function balancesForTrip(t: Trip) {
   return { members, pairs, log };
 }
 
+// ---------- journeys ----------
+// A Journey reads each member trip's per-person net position (in that trip's
+// settle currency), converts to the Journey Currency at the current rate,
+// sums per Person, then simplifies to minimal transfers.
+
+// Trips the session may open (used for the journey trip-picker and access).
+function accessibleTrips(s: Session): Trip[] {
+  const consented = db.query<{ trip_token: string }, [string]>(
+    "SELECT trip_token FROM consents WHERE session_token = ?",
+  ).all(s.token).map((r) => r.trip_token);
+  const linked = s.user_sub
+    ? db.query<{ trip_token: string }, [string]>(
+        "SELECT trip_token FROM members WHERE user_sub = ?",
+      ).all(s.user_sub).map((r) => r.trip_token)
+    : [];
+  const tokens = [...new Set([...consented, ...linked])];
+  return tokens.map((t) => qTrip.get(t)).filter((t): t is Trip => !!t && hasAccess(s, t));
+}
+
+function journeyTrips(j: Journey): Trip[] {
+  return db.query<{ trip_token: string }, [string]>(
+    "SELECT trip_token FROM journey_trips WHERE journey_token = ?",
+  ).all(j.token).map((r) => qTrip.get(r.trip_token)).filter((t): t is Trip => !!t);
+}
+
+// Access: any session that can open at least one member trip.
+function journeyAccess(s: Session, j: Journey): boolean {
+  return journeyTrips(j).some((t) => hasAccess(s, t));
+}
+
+// Per-member net in settle-currency *units* (positive = owed money).
+function netPositions(t: Trip): Map<string, number> {
+  const dec = decimals(t.settle_currency);
+  const net = new Map<string, number>();
+  const add = (id: string, v: number) => net.set(id, (net.get(id) ?? 0) + v);
+  for (const e of db.query<ExpenseRow, [string]>(
+    "SELECT * FROM expenses WHERE trip_token = ?",
+  ).all(t.token)) {
+    if (!e.payer_member_id || e.paid_out) continue;
+    const rate = e.currency === t.settle_currency ? 1 : e.rate;
+    if (rate === null) continue;
+    for (const s of effectiveShares(e)) {
+      if (s.minor === null) continue;
+      const units = (s.minor / 10 ** decimals(e.currency)) * rate;
+      add(e.payer_member_id, units);
+      if (s.member_id !== e.payer_member_id) add(s.member_id, -units);
+    }
+  }
+  for (const s of db.query<{ from_member: string; to_member: string; amount_minor: number }, [string]>(
+    "SELECT from_member, to_member, amount_minor FROM settlements WHERE trip_token = ?",
+  ).all(t.token)) {
+    add(s.from_member, s.amount_minor / 10 ** dec);
+    add(s.to_member, -s.amount_minor / 10 ** dec);
+  }
+  return net;
+}
+
+type JourneyMember = Member & { trip_name?: string };
+
+// Person key: linked members share their user_sub; manual merges share a
+// group_id; otherwise the member stands alone.
+function journeyPeople(j: Journey): { persons: Map<string, { name: string; memberIds: string[]; linked: boolean }>; keyOf: (m: JourneyMember) => string } {
+  const merges = db.query<{ member_id: string; group_id: string }, [string]>(
+    "SELECT member_id, group_id FROM journey_merges WHERE journey_token = ?",
+  ).all(j.token);
+  const groupOf = new Map(merges.map((m) => [m.member_id, m.group_id]));
+  const allMembers: JourneyMember[] = [];
+  for (const t of journeyTrips(j)) {
+    for (const m of db.query<Member, [string]>(
+      "SELECT * FROM members WHERE trip_token = ? ORDER BY name",
+    ).all(t.token)) allMembers.push({ ...m, trip_name: t.name });
+  }
+  const persons = new Map<string, { name: string; memberIds: string[]; linked: boolean }>();
+  const keyOf = (m: JourneyMember) =>
+    groupOf.get(m.id) ?? (m.user_sub ? `u:${m.user_sub}` : `m:${m.id}`);
+  // prefer the linked member's name for a group's label
+  const label = (ids: string[]) => {
+    const ms = ids.map((id) => allMembers.find((m) => m.id === id)!).filter(Boolean);
+    return (ms.find((m) => m.user_sub) ?? ms[0])?.name ?? "?";
+  };
+  const byKey = new Map<string, string[]>();
+  for (const m of allMembers) {
+    const k = keyOf(m);
+    byKey.set(k, [...(byKey.get(k) ?? []), m.id]);
+  }
+  for (const [k, ids] of byKey) {
+    persons.set(k, { name: label(ids), memberIds: ids, linked: ids.some((id) => allMembers.find((m) => m.id === id)?.user_sub) });
+  }
+  return { persons, keyOf };
+}
+
+function journeyBalance(j: Journey) {
+  const { persons, keyOf } = journeyPeople(j);
+  const jDec = decimals(j.settle_currency);
+  const net = new Map<string, number>(); // person key -> journey-currency units
+  const perTrip: { token: string; name: string; settle_currency: string; converted: boolean; balances: { person: string; net: number }[] }[] = [];
+  for (const t of journeyTrips(j)) {
+    const nets = netPositions(t);
+    const conv = t.settle_currency === j.settle_currency
+      ? { rate: 1 }
+      : crossRate(t.settle_currency, j.settle_currency);
+    const members = db.query<Member, [string]>("SELECT * FROM members WHERE trip_token = ?").all(t.token);
+    const rows: { person: string; net: number }[] = [];
+    for (const [mid, v] of nets) {
+      const m = members.find((mm) => mm.id === mid);
+      if (!m || Math.abs(v) < 1e-9) continue;
+      const key = keyOf(m);
+      const person = persons.get(key)?.name ?? m.name;
+      rows.push({ person, net: v });
+      if (conv) net.set(key, (net.get(key) ?? 0) + v * conv.rate);
+    }
+    perTrip.push({ token: t.token, name: t.name, settle_currency: t.settle_currency, converted: !!conv, balances: rows.sort((a, b) => a.net - b.net) });
+  }
+  // greedy simplify: largest debtor pays largest creditor
+  const debtors = [...net.entries()].filter(([, v]) => v < -1e-6).map(([k, v]) => ({ k, v: -v })).sort((a, b) => b.v - a.v);
+  const creditors = [...net.entries()].filter(([, v]) => v > 1e-6).map(([k, v]) => ({ k, v })).sort((a, b) => b.v - a.v);
+  const transfers: { from: string; to: string; amount: number }[] = [];
+  let i = 0, jj = 0;
+  while (i < debtors.length && jj < creditors.length) {
+    const pay = Math.min(debtors[i].v, creditors[jj].v);
+    transfers.push({
+      from: persons.get(debtors[i].k)?.name ?? "?",
+      to: persons.get(creditors[jj].k)?.name ?? "?",
+      amount: Math.round(pay * 10 ** jDec) / 10 ** jDec,
+    });
+    debtors[i].v -= pay; creditors[jj].v -= pay;
+    if (debtors[i].v < 1e-6) i++;
+    if (creditors[jj].v < 1e-6) jj++;
+  }
+  const positions = [...net.entries()].map(([k, v]) => ({
+    person: persons.get(k)?.name ?? "?", net: Math.round(v * 10 ** jDec) / 10 ** jDec,
+  })).sort((a, b) => a.net - b.net);
+  return { transfers, positions, perTrip };
+}
+
 // ---------- SSE ----------
 const listeners = new Map<string, Set<ReadableStreamDefaultController>>();
 function broadcast(tripToken: string) {
@@ -618,6 +755,12 @@ const routes: Route[] = [
         is_me: me?.id === mm.id,
       })),
       balances: pairs,
+      journey: (() => {
+        const r = db.query<{ journey_token: string; name: string }, [string]>(
+          "SELECT jt.journey_token, j.name FROM journey_trips jt JOIN journeys j ON j.token = jt.journey_token WHERE jt.trip_token = ?",
+        ).get(t.token);
+        return r ? { token: r.journey_token, name: r.name } : null;
+      })(),
       balance_log: log,
       no_rate_count: db.query<{ n: number }, [string]>(
         "SELECT COUNT(*) n FROM expenses WHERE trip_token = ? AND rate IS NULL",
@@ -1160,6 +1303,135 @@ const routes: Route[] = [
     if (o instanceof Response) return o;
     db.run("DELETE FROM settlements WHERE id = ?", [st.id]);
     broadcast(st.trip_token);
+    return json({ ok: true });
+  }],
+
+  // ---- journeys ----
+  [/^\/api\/accessible-trips$/, "GET", async (req) => {
+    const s = sessionFrom(req);
+    if (!s) return json({ trips: [] });
+    const jOf = db.prepare<{ journey_token: string; name: string }, [string]>(
+      "SELECT jt.journey_token, j.name FROM journey_trips jt JOIN journeys j ON j.token = jt.journey_token WHERE jt.trip_token = ?");
+    return json({
+      trips: accessibleTrips(s).map((t) => {
+        const j = jOf.get(t.token);
+        return { token: t.token, name: t.name, journey: j ? { token: j.journey_token, name: j.name } : null };
+      }),
+    });
+  }],
+
+  [/^\/api\/journeys$/, "POST", async (req, _m, body) => {
+    const { session: s, headers } = ensureSession(req);
+    const name = String(body.name ?? "").trim();
+    if (!name) return err(400, "name_required");
+    const sc = String(body.settle_currency ?? "").toUpperCase();
+    if (!isCurrency(sc)) return err(400, "bad_currency");
+    const wanted = Array.isArray(body.trip_tokens) ? body.trip_tokens.map(String) : [];
+    const allowed = new Set(accessibleTrips(s).map((t) => t.token));
+    const tokens = [...new Set(wanted)].filter((t) => allowed.has(t));
+    if (!tokens.length) return err(400, "no_trips");
+    const token = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+    db.run("INSERT INTO journeys (token, name, settle_currency, created_at) VALUES (?,?,?,?)",
+      [token, name, sc, now()]);
+    for (const tt of tokens)
+      db.run("INSERT OR IGNORE INTO journey_trips (journey_token, trip_token) VALUES (?,?)", [token, tt]);
+    return json({ token }, { headers });
+  }],
+
+  [/^\/api\/journeys\/([A-Za-z0-9]+)$/, "GET", async (req, m) => {
+    const s = sessionFrom(req) ?? { token: "", user_sub: null };
+    const j = qJourney.get(m[1]);
+    if (!j) return err(404, "journey_not_found");
+    if (!journeyAccess(s, j)) return err(403, "no_access");
+    const trips = journeyTrips(j);
+    // merge hints: same name across different trips, not already one person
+    const { persons, keyOf } = journeyPeople(j);
+    const hints: { name: string; member_ids: string[]; trips: string[] }[] = [];
+    const allM = trips.flatMap((t) =>
+      db.query<Member, [string]>("SELECT * FROM members WHERE trip_token = ? ORDER BY name")
+        .all(t.token).map((mm) => ({ ...mm, trip_name: t.name })));
+    const byName = new Map<string, JourneyMember[]>();
+    for (const mm of allM) {
+      const k = mm.name.toLowerCase();
+      byName.set(k, [...(byName.get(k) ?? []), mm]);
+    }
+    for (const [, ms] of byName) {
+      const keys = new Set(ms.map((mm) => keyOf(mm)));
+      if (keys.size > 1)
+        hints.push({ name: ms[0].name, member_ids: ms.map((mm) => mm.id), trips: [...new Set(ms.map((mm) => mm.trip_name!))] });
+    }
+    const { transfers, positions, perTrip } = journeyBalance(j);
+    return json({
+      journey: { token: j.token, name: j.name, settle_currency: j.settle_currency },
+      trips: trips.map((t) => ({ token: t.token, name: t.name, settle_currency: t.settle_currency })),
+      persons: [...persons.entries()].map(([k, p]) => ({ key: k, ...p })),
+      members: allM.map((mm) => ({ id: mm.id, name: mm.name, trip_name: mm.trip_name, key: keyOf(mm), linked: !!mm.user_sub })),
+      mergeHints: hints,
+      transfers, positions, perTrip,
+      mergeableTrips: accessibleTrips(s)
+        .filter((t) => !db.query("SELECT 1 FROM journey_trips WHERE trip_token = ?").get(t.token))
+        .map((t) => ({ token: t.token, name: t.name })),
+    });
+  }],
+
+  [/^\/api\/journeys\/([A-Za-z0-9]+)\/trips$/, "POST", async (req, m, body) => {
+    const s = sessionFrom(req)!;
+    const j = qJourney.get(m[1]);
+    if (!j) return err(404, "journey_not_found");
+    if (!journeyAccess(s, j)) return err(403, "no_access");
+    const tt = String(body.trip_token ?? "");
+    const t = qTrip.get(tt);
+    if (!t) return err(404, "trip_not_found");
+    if (!hasAccess(s, t)) return err(403, "no_trip_access");
+    if (db.query("SELECT 1 FROM journey_trips WHERE trip_token = ?").get(tt))
+      return err(409, "already_in_journey");
+    db.run("INSERT INTO journey_trips (journey_token, trip_token) VALUES (?,?)", [j.token, tt]);
+    for (const tr of journeyTrips(j)) broadcast(tr.token);
+    return json({ ok: true });
+  }],
+
+  [/^\/api\/journeys\/([A-Za-z0-9]+)\/trips\/([A-Za-z0-9]+)$/, "DELETE", async (req, m) => {
+    const s = sessionFrom(req)!;
+    const j = qJourney.get(m[1]);
+    if (!j) return err(404, "journey_not_found");
+    if (!journeyAccess(s, j)) return err(403, "no_access");
+    db.run("DELETE FROM journey_trips WHERE journey_token = ? AND trip_token = ?", [j.token, m[2]]);
+    db.run("DELETE FROM journey_merges WHERE journey_token = ? AND member_id IN (SELECT id FROM members WHERE trip_token = ?)", [j.token, m[2]]);
+    for (const tr of journeyTrips(j)) broadcast(tr.token);
+    broadcast(m[2]);
+    return json({ ok: true });
+  }],
+
+  [/^\/api\/journeys\/([A-Za-z0-9]+)\/merge$/, "POST", async (req, m, body) => {
+    const s = sessionFrom(req)!;
+    const j = qJourney.get(m[1]);
+    if (!j) return err(404, "journey_not_found");
+    if (!journeyAccess(s, j)) return err(403, "no_access");
+    const ids = (Array.isArray(body.member_ids) ? body.member_ids : []).map(String);
+    const inJourney = new Set(journeyTrips(j).flatMap((t) =>
+      db.query<{ id: string }, [string]>("SELECT id FROM members WHERE trip_token = ?").all(t.token).map((r) => r.id)));
+    const valid = ids.filter((id) => inJourney.has(id));
+    if (valid.length < 2) return err(400, "need_two_members");
+    // merge into the group of the first already-grouped member, else new group
+    const existing = db.prepare<{ group_id: string }, [string, string]>(
+      "SELECT group_id FROM journey_merges WHERE journey_token = ? AND member_id = ? LIMIT 1",
+    );
+    let gid: string | null = null;
+    for (const id of valid) { const r = existing.get(j.token, id); if (r) { gid = r.group_id; break; } }
+    gid ??= crypto.randomUUID();
+    for (const id of valid)
+      db.run("INSERT OR REPLACE INTO journey_merges (journey_token, member_id, group_id) VALUES (?,?,?)", [j.token, id, gid]);
+    for (const tr of journeyTrips(j)) broadcast(tr.token);
+    return json({ ok: true, group_id: gid });
+  }],
+
+  [/^\/api\/journeys\/([A-Za-z0-9]+)\/merge\/([A-Za-z0-9-]+)$/, "DELETE", async (req, m) => {
+    const s = sessionFrom(req)!;
+    const j = qJourney.get(m[1]);
+    if (!j) return err(404, "journey_not_found");
+    if (!journeyAccess(s, j)) return err(403, "no_access");
+    db.run("DELETE FROM journey_merges WHERE journey_token = ? AND member_id = ?", [j.token, m[2]]);
+    for (const tr of journeyTrips(j)) broadcast(tr.token);
     return json({ ok: true });
   }],
 

@@ -8,6 +8,7 @@ import "./styles.css";
 import { DayPicker, type DateRange } from "react-day-picker";
 import "react-day-picker/style.css";
 import { SignInButton } from "./SignIn.tsx";
+import JourneyView from "./Journey.tsx";
 
 type Me = { user: { email: string; name: string | null } | null };
 
@@ -35,6 +36,25 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
   const [showCreate, setShowCreate] = useState(false);
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
+  const [showJourney, setShowJourney] = useState(false);
+  const [jName, setJName] = useState("");
+  const [jCur, setJCur] = useState("");
+  const [jPicked, setJPicked] = useState<Set<string>>(new Set());
+  const [jTrips, setJTrips] = useState<{ token: string; name: string; journey: { token: string; name: string } | null }[]>([]);
+
+  const openJourneyModal = async () => {
+    setShowJourney(true);
+    const r = await api.get("/api/accessible-trips");
+    setJTrips(r.trips.filter((t: { journey: unknown }) => !t.journey));
+  };
+  const createJourney = async () => {
+    try {
+      const r = await api.post("/api/journeys", {
+        name: jName, settle_currency: jCur, trip_tokens: [...jPicked],
+      });
+      location.hash = `#/j/${r.token}`;
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+  };
   const currencies = config?.currencies ?? [];
 
   const create = async () => {
@@ -78,6 +98,44 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
       </div>
 
       <button className="primary" onClick={() => setShowCreate(true)}>Create a trip</button>
+
+      <button onClick={openJourneyModal}>Create a journey</button>
+
+      {showJourney && (
+        <div className="modal-bg" onClick={() => setShowJourney(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Create a journey</h3>
+            <p className="muted">A journey shares one "who owes who" balance across trips.</p>
+            <div className="field"><label className="field-label">Name</label>
+              <input className="wide" autoFocus value={jName} onChange={(e) => setJName(e.target.value)}
+                placeholder="e.g. Asia 2026" /></div>
+            <div className="field"><label className="field-label">Shared balance currency</label>
+              <CurrencyPicker value={jCur} options={currencies} onChange={setJCur} /></div>
+            <div className="field"><label className="field-label">Trips to include — tap to select</label>
+              {jTrips.length === 0
+                ? <p className="muted">No trips available — create trips first, or open them on this device.</p>
+                : (
+                  <div className="pills" style={{ flexDirection: "column", alignItems: "stretch" }}>
+                    {jTrips.map((t) => (
+                      <button key={t.token}
+                        className={`member-pill${jPicked.has(t.token) ? " picked" : ""}`}
+                        style={{ textAlign: "left", padding: "10px 14px", cursor: "pointer" }}
+                        onClick={() => setJPicked((s) => { const n = new Set(s); n.has(t.token) ? n.delete(t.token) : n.add(t.token); return n; })}>
+                        {jPicked.has(t.token) ? "✓ " : ""}{t.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+            </div>
+            {err && <div className="error">{err}</div>}
+            <div className="modal-btns">
+              <button className="link" onClick={() => setShowJourney(false)}>Cancel</button>
+              <button className="primary" onClick={createJourney}
+                disabled={!jName.trim() || !jCur || jPicked.size === 0}>Create journey</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showCreate && (
         <div className="modal-bg" onClick={() => setShowCreate(false)}>
@@ -245,10 +303,12 @@ function App() {
 
   const mTrip = /^\/t\/([A-Za-z0-9]+)$/.exec(path);
   const mExp = /^\/t\/([A-Za-z0-9]+)\/e\/([A-Za-z0-9-]+)$/.exec(path);
-
+  const mJourney = /^\/j\/([A-Za-z0-9]+)$/.exec(path);
   return (
     <>
       {mExp ? <ExpenseView key={mExp[2]} token={mExp[1]} expenseId={mExp[2]} />
+        : mJourney ? <JourneyView key={mJourney[1]} token={mJourney[1]} />
+        : mTrip ? <TripView key={mTrip[1]} token={mTrip[1]} config={config} me={me} reloadMe={reloadMe} />
         : mTrip ? <TripView key={mTrip[1]} token={mTrip[1]} config={config} me={me} reloadMe={reloadMe} />
         : <Home config={config} me={me} reloadMe={reloadMe} />}
     </>

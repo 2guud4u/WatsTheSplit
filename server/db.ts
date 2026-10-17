@@ -167,6 +167,27 @@ if (!db.query("SELECT 1 FROM pragma_table_info('expenses') WHERE name='paid_out'
   db.exec("ALTER TABLE expenses ADD COLUMN paid_out INTEGER NOT NULL DEFAULT 0");
 }
 
+db.exec(`
+CREATE TABLE IF NOT EXISTS journeys (
+  token           TEXT PRIMARY KEY,
+  name            TEXT NOT NULL,
+  settle_currency TEXT NOT NULL,
+  created_at      TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS journey_trips (
+  journey_token TEXT NOT NULL REFERENCES journeys(token) ON DELETE CASCADE,
+  trip_token    TEXT NOT NULL UNIQUE REFERENCES trips(token) ON DELETE CASCADE,
+  PRIMARY KEY (journey_token, trip_token)
+);
+-- manual identity merge: members in the same group_id count as one person
+CREATE TABLE IF NOT EXISTS journey_merges (
+  journey_token TEXT NOT NULL REFERENCES journeys(token) ON DELETE CASCADE,
+  member_id     TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+  group_id      TEXT NOT NULL,
+  PRIMARY KEY (journey_token, member_id)
+);
+`)
+
 // migrate: users table keyed by email instead of google_sub; sessions/members
 // .user_sub carries the email going forward. FK off so DROP TABLE isn't blocked
 // by references; each step drops its staging table first so a crash mid-migration

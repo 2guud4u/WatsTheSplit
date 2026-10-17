@@ -218,6 +218,7 @@ button.member-chip:hover:not(:disabled) { border-color: var(--accent); }
   border: 1px solid var(--border); background: var(--surface);
   font-size: 13px; font-weight: 600;
 }
+.member-pill.picked { border-color: var(--accent); color: var(--accent); }
 .pill-x {
   border: none; background: none; padding: 0 2px; cursor: pointer;
   color: var(--muted); font-size: 11px; line-height: 1;

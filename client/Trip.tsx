@@ -20,6 +20,7 @@ type TripData = {
     trip_currency: string; settle_currency: string; has_password: boolean; password: string | null; fun_leaderboard: boolean;
   };
   me: { id: string; name: string; linked: boolean; opted_out_fun?: boolean } | null;
+  journey: { token: string; name: string } | null;
   signed_in: boolean;
   is_creator: boolean;
   fun: { awards: { emoji: string; title: string; members: string[]; detail: string }[] } | null;
@@ -240,6 +241,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
         {t.trip_currency} trip · settles in {t.settle_currency}
         {data.fx_timestamp && ` · rates as of ${new Date(data.fx_timestamp).toLocaleString()}`}
         {t.has_password && " · 🔒"}
+        {data.journey && <> · part of <a href={`#/j/${data.journey.token}`}>{data.journey.name}</a></>}
       </p>
       <div className="row" style={{ marginBottom: 12 }}>
         <span className="member-chip"><Avatar name={me.name} /><b>{me.name}</b>{me.linked ? " ✓" : ""}</span>

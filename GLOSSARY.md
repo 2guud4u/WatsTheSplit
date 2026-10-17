@@ -8,6 +8,14 @@ Splitting shared costs among friends on a trip, where each expense is converted 
 A named, dated group of people who share costs, with one Trip Currency and one Settlement Currency.
 _Avoid_: Group, event
 
+**Journey**:
+A named group of Trips that share one "who owes who" view, in a Journey Currency. Reachable from inside any member Trip; a Trip belongs to at most one Journey.
+_Avoid_: Folder, collection
+
+**Person**:
+A real human across the Trips in a Journey: Members with the same signed-in account count as one Person, and unlinked Members can be merged into one manually.
+_Avoid_: User, identity
+
 **Member**:
 A named person in a Trip. A Member is a Placeholder Member, a Claimed Member, or a Linked Member.
 _Avoid_: User, friend, participant (when meaning Trip membership)
@@ -41,6 +49,10 @@ _Avoid_: Default currency, local currency
 **Settlement Currency**:
 The currency all Balances and Settlements on a Trip are shown in.
 _Avoid_: Group currency, home currency, base currency
+
+**Journey Currency**:
+The currency a Journey's shared Balance is shown in.
+_Avoid_: Group currency
 
 **Locked Rate**:
 The exchange rate from an Expense's currency to the Settlement Currency, taken when the Expense is created and taken again only if its currency changes.
