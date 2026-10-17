@@ -586,6 +586,10 @@ const routes: Route[] = [
         "SELECT * FROM settlements WHERE trip_token = ? ORDER BY created_at DESC",
       ).all(t.token),
       fx_timestamp: latestProviderTimestamp(),
+      // current FX snapshot for the trip pair (display only; expenses keep their locked rate)
+      current_rate: t.trip_currency === t.settle_currency
+        ? { rate: 1, providerTimestamp: null }
+        : crossRate(t.trip_currency, t.settle_currency),
       fun: t.fun_leaderboard ? funBoard(t) : null,
     });
   }],

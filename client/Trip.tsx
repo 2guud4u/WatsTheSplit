@@ -31,6 +31,7 @@ type TripData = {
   expenses: ExpenseSum[];
   settlements: Settlement[];
   fx_timestamp: string | null;
+  current_rate: { rate: number; providerTimestamp: string | null } | null;
 };
 
 const AVATAR_COLORS = ["#b56a4c","#7a9b6d","#c9a25e","#8f7fae","#b07575","#7d9aa8","#a08a6e","#6d7f9e"];
@@ -219,6 +220,11 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
         <h1 style={{ marginBottom: 4 }}>{t.name}</h1>
         <a href="#/" className="muted">← home</a>
       </div>
+      <p className="muted" style={{ marginTop: 0 }}>
+        {data.current_rate && t.trip_currency !== t.settle_currency
+          ? `1 ${t.trip_currency} ≈ ${data.current_rate.rate.toPrecision(6)} ${t.settle_currency}`
+          : t.trip_currency === t.settle_currency ? "same currency — no conversion" : "no exchange rate yet"}
+      </p>
       <p className="muted">
         {t.start_date && t.end_date ? `${t.start_date} → ${t.end_date} · ` : ""}
         {t.trip_currency} trip · settles in {t.settle_currency}
