@@ -94,6 +94,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
   const [showSettings, setShowSettings] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
   const [showSignIn, setShowSignIn] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [settleFrom, settleTo] = [settle.from, settle.to];
 
   const load = useCallback(async () => {
@@ -254,7 +255,11 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
         <div className="card">
           <div className="row">
             <input className="wide" readOnly value={inviteUrl} onFocus={(e) => e.target.select()} />
-            <button onClick={() => navigator.clipboard?.writeText(inviteUrl)}>Copy</button>
+            <button onClick={async () => {
+              await navigator.clipboard?.writeText(inviteUrl);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            }}>{copied ? "Copied ✓" : "Copy"}</button>
           </div>
           <QR text={inviteUrl} />
           <p className="muted">Anyone with this link can join — keep it private.</p>
