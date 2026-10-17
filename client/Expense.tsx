@@ -10,7 +10,7 @@ type Expense = {
   rate: number | null; rate_provider: string | null; rate_timestamp: string | null;
   recorded_at: string; last_edited_by: string | null; last_edited_at: string;
   assigned_minor: number; unassigned_minor: number; over: boolean; paid_out?: boolean;
-  participants?: { member_id: string; share_minor: number | null; name: string }[];
+  participants?: { member_id: string; share_minor: number | null; name: string; paid?: number }[];
   items?: Item[];
   effective_shares?: { member_id: string; minor: number | null }[];
   photos?: string[];
@@ -187,30 +187,46 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
         </p>
 
         <h3 style={{ margin: "8px 0" }}>Amounts</h3>
-        {(e.participants ?? []).map((p, i) => (
-          <div key={p.member_id} className="item-row">
-            <span style={{ flex: 1 }}>
-              <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 5,
-                background: COLORS[i % COLORS.length], marginRight: 6 }} />
-              {p.name}
-              {p.member_id === e.payer_member_id && <span className="pill"> (payer)</span>}
-            </span>
-            <input className="money" inputMode="decimal"
-              defaultValue={p.share_minor === null ? "" : String(p.share_minor / 10 ** dec)}
-              key={String(p.share_minor)}
-              placeholder={p.share_minor === null
-                ? ((e.effective_shares?.find((s) => s.member_id === p.member_id)?.minor ?? 0) / 10 ** dec).toFixed(dec)
-                : "0"}
-              onBlur={async (ev) => {
-                const v = ev.target.value;
-                await api.put(`/api/expenses/${e.id}/shares`, {
-                  member_id: p.member_id,
-                  share_minor: v === "" ? null : toMinor(v, e.currency),
-                });
-                load();
-              }} />
-          </div>
-        ))}
+        {(e.participants ?? []).map((p, i) => {
+          const canToggle = data.me === e.payer_member_id || data.me === p.member_id;
+          const isPayer = p.member_id === e.payer_member_id;
+          return (
+            <div key={p.member_id} className="item-row">
+              <span style={{ flex: 1 }}>
+                <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: 5,
+                  background: COLORS[i % COLORS.length], marginRight: 6 }} />
+                {p.name}
+                {isPayer && <span className="pill"> (payer)</span>}
+              </span>
+              <input className="money" inputMode="decimal"
+                defaultValue={p.share_minor === null ? "" : String(p.share_minor / 10 ** dec)}
+                key={String(p.share_minor)}
+                placeholder={p.share_minor === null
+                  ? ((e.effective_shares?.find((s) => s.member_id === p.member_id)?.minor ?? 0) / 10 ** dec).toFixed(dec)
+                  : "0"}
+                onBlur={async (ev) => {
+                  const v = ev.target.value;
+                  await api.put(`/api/expenses/${e.id}/shares`, {
+                    member_id: p.member_id,
+                    share_minor: v === "" ? null : toMinor(v, e.currency),
+                  });
+                  load();
+                }} />
+              {!isPayer && (
+                <button
+                  className={`pill paid-chip${p.paid ? " on" : ""}`}
+                  disabled={!canToggle}
+                  title={canToggle ? (p.paid ? "mark unpaid" : "mark paid") : "only the payer or this person can toggle"}
+                  onClick={async () => {
+                    await api.put(`/api/expenses/${e.id}/paid`, { member_id: p.member_id, paid: !p.paid });
+                    load();
+                  }}>
+                  {p.paid ? "✓ paid" : "paid"}
+                </button>
+              )}
+            </div>
+          );
+        })}
         <div className="row" style={{ marginTop: 8 }}>
           <button onClick={async () => { await api.post(`/api/expenses/${e.id}/split`, { type: "equal_rest" }); load(); }}>
             Split unassigned equally

@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS expense_participants (
   expense_id TEXT NOT NULL REFERENCES expenses(id) ON DELETE CASCADE,
   member_id  TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
   share_minor INTEGER,
+  paid       INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (expense_id, member_id)
 );
 
@@ -187,6 +188,12 @@ CREATE TABLE IF NOT EXISTS journey_merges (
   PRIMARY KEY (journey_token, member_id)
 );
 `)
+
+if (!db.query("SELECT 1 FROM pragma_table_info('expense_participants') WHERE name='paid'").get()) {
+  db.exec("ALTER TABLE expense_participants ADD COLUMN paid INTEGER NOT NULL DEFAULT 0");
+  // carry over the old whole-expense flag
+  db.exec(`UPDATE expense_participants SET paid = 1 WHERE expense_id IN (SELECT id FROM expenses WHERE paid_out = 1)`);
+}
 
 // migrate: users table keyed by email instead of google_sub; sessions/members
 // .user_sub carries the email going forward. FK off so DROP TABLE isn't blocked

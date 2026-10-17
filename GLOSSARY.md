@@ -91,8 +91,12 @@ _Avoid_: Remainder, missing amount
 One line of an itemized Expense, with a name, a price, and the Participants who split it equally.
 _Avoid_: Line item, entry
 
+**Paid**:
+A Participant's Share marked as reimbursed — by the Payer or by the Participant themself. A Paid Share doesn't count toward Balances.
+_Avoid_: Reimbursed share, settled share
+
 **Paid Out**:
-An Expense the Payer marked as fully reimbursed; its Shares don't count toward Balances until unmarked.
+An Expense whose Shares are all Paid; it contributes nothing to Balances.
 _Avoid_: Settled expense, closed, done
 
 ## Owing

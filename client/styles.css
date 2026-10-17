@@ -219,6 +219,9 @@ button.member-chip:hover:not(:disabled) { border-color: var(--accent); }
   font-size: 13px; font-weight: 600;
 }
 .member-pill.picked { border-color: var(--accent); color: var(--accent); }
+.paid-chip { border: 1px solid var(--border); background: none; cursor: pointer; padding: 2px 10px; }
+.paid-chip.on { border-color: var(--success, #4a7c4e); color: var(--success, #4a7c4e); }
+.paid-chip:disabled { opacity: .45; cursor: default; }
 .pill-x {
   border: none; background: none; padding: 0 2px; cursor: pointer;
   color: var(--muted); font-size: 11px; line-height: 1;

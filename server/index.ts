@@ -143,8 +143,8 @@ function effectiveShares(e: ExpenseRow): { member_id: string; minor: number | nu
   itemTotal = db.query<{ t: number }, [string]>(
     "SELECT COALESCE(SUM(price_minor),0) t FROM items WHERE expense_id = ?",
   ).get(e.id)!.t;
-  const parts = db.query<{ member_id: string; share_minor: number | null }, [string]>(
-    "SELECT member_id, share_minor FROM expense_participants WHERE expense_id = ?",
+  const parts = db.query<{ member_id: string; share_minor: number | null; paid: number }, [string]>(
+    "SELECT member_id, share_minor, paid FROM expense_participants WHERE expense_id = ?",
   ).all(e.id);
   const ids = new Set(parts.map((p) => p.member_id));
   for (const id of Object.keys(itemByMember)) ids.add(id);
@@ -166,6 +166,13 @@ function effectiveShares(e: ExpenseRow): { member_id: string; minor: number | nu
   });
 }
 
+// Set of participant member_ids whose share is marked paid.
+function paidMembers(expenseId: string): Set<string> {
+  return new Set(db.query<{ member_id: string }, [string]>(
+    "SELECT member_id FROM expense_participants WHERE expense_id = ? AND paid = 1",
+  ).all(expenseId).map((r) => r.member_id));
+}
+
 function expensePayload(e: ExpenseRow, detail: boolean) {
   const shares = effectiveShares(e);
   const assigned = shares.reduce((a, s) => a + (s.minor ?? 0), 0);
@@ -176,11 +183,13 @@ function expensePayload(e: ExpenseRow, detail: boolean) {
     rate: e.rate, rate_provider: e.rate_provider, rate_timestamp: e.rate_timestamp,
     last_edited_by: e.last_edited_by, last_edited_at: e.last_edited_at,
     assigned_minor: assigned, unassigned_minor: unassigned, over: unassigned < 0,
-    paid_out: !!e.paid_out,
+    paid_out: paidMembers(e.id).size > 0 && shares.every((s) => s.minor === null || paidMembers(e.id).has(s.member_id)),
+    paid_count: paidMembers(e.id).size,
+    share_count: shares.filter((s) => s.minor !== null).length,
   };
   if (!detail) return base;
-  base.participants = db.query<{ member_id: string; share_minor: number | null; name: string }, [string]>(
-    `SELECT p.member_id, p.share_minor, m.name FROM expense_participants p
+  base.participants = db.query<{ member_id: string; share_minor: number | null; name: string; paid: number }, [string]>(
+    `SELECT p.member_id, p.share_minor, p.paid, m.name FROM expense_participants p
      JOIN members m ON m.id = p.member_id WHERE p.expense_id = ?`,
   ).all(e.id);
   base.items = db.query<{ id: string; name: string; price_minor: number }, [string]>(
@@ -457,11 +466,12 @@ function netPositions(t: Trip): Map<string, number> {
   for (const e of db.query<ExpenseRow, [string]>(
     "SELECT * FROM expenses WHERE trip_token = ?",
   ).all(t.token)) {
-    if (!e.payer_member_id || e.paid_out) continue;
+    if (!e.payer_member_id) continue;
+    const paid = paidMembers(e.id);
     const rate = e.currency === t.settle_currency ? 1 : e.rate;
     if (rate === null) continue;
     for (const s of effectiveShares(e)) {
-      if (s.minor === null) continue;
+      if (s.minor === null || paid.has(s.member_id)) continue;
       const units = (s.minor / 10 ** decimals(e.currency)) * rate;
       add(e.payer_member_id, units);
       if (s.member_id !== e.payer_member_id) add(s.member_id, -units);
@@ -1022,9 +1032,10 @@ const routes: Route[] = [
       db.run("UPDATE expenses SET category = ? WHERE id = ?", [c, e.id]);
     }
     if (body.paid_out !== undefined) {
-      // only the member acting as the payer can mark an expense all-paid
+      // only the member acting as the payer can mark an expense all-paid;
+      // implemented as marking every participant's share paid
       if (me?.id !== e.payer_member_id) return err(403, "payer_only");
-      db.run("UPDATE expenses SET paid_out = ? WHERE id = ?", [body.paid_out ? 1 : 0, e.id]);
+      db.run("UPDATE expense_participants SET paid = ? WHERE expense_id = ?", [body.paid_out ? 1 : 0, e.id]);
     }
     if (body.currency !== undefined) {
       const c = String(body.currency).toUpperCase();
@@ -1054,6 +1065,23 @@ const routes: Route[] = [
     if (o instanceof Response) return o;
     db.run("DELETE FROM expenses WHERE id = ?", [e.id]);
     broadcast(o.trip.token);
+    return json({ ok: true });
+  }],
+
+  // Per-person paid toggle: the payer or the person themself.
+  [/^\/api\/expenses\/([A-Za-z0-9-]+)\/paid$/, "PUT", async (req, m, body) => {
+    const s = sessionFrom(req)!;
+    const e = db.query<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(m[1]);
+    if (!e) return err(404, "expense_not_found");
+    const o = openTrip(e.trip_token, s);
+    if (o instanceof Response) return o;
+    const t = o.trip;
+    const me = myMember(s, t);
+    const mid = String(body.member_id ?? "");
+    if (me?.id !== e.payer_member_id && me?.id !== mid) return err(403, "payer_or_self_only");
+    db.run("INSERT OR IGNORE INTO expense_participants (expense_id, member_id, share_minor, paid) VALUES (?,?,NULL,0)", [e.id, mid]);
+    db.run("UPDATE expense_participants SET paid = ? WHERE expense_id = ? AND member_id = ?", [body.paid ? 1 : 0, e.id, mid]);
+    broadcast(t.token);
     return json({ ok: true });
   }],
 
