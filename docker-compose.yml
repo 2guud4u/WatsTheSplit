@@ -7,6 +7,7 @@ services:
     container_name: wts-server
     ports:
       # Tailnet + LAN only — public traffic arrives via the wts tunnel.
+      - "127.0.0.1:8081:8081"
       - "100.127.5.96:8081:8081"
       - "192.168.8.208:8081:8081"
     env_file: .env            # BASE_URL / GOOGLE_CLIENT_ID / OXR_APP_ID (gitignored)
