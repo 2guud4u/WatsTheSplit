@@ -250,31 +250,38 @@ export default function JourneyView({ token }: { token: string }) {
   );
 }
 
-// Mark a journey card paid: pick all trips or some, then record one Settlement
-// per picked trip, for that trip's full debt, between that trip's own Members.
-// Pieces running the other way (the payee owes the payer in that trip) are
-// already netted into the card total, so they can only be settled together
-// with the rest via "all".
+// Settle a journey card: tick any trips, then record one Settlement per ticked
+// trip for that trip's full debt, in that trip's own direction, between its own
+// Members. Real money only moves once, for the net of the ticked trips; recording
+// each trip in full is what makes every ticked trip balance exactly zero.
 function MarkPaidModal({ transfer, currency, trips, onClose, onDone }: {
   transfer: Transfer; currency: string; trips: JTrip[];
   onClose: () => void; onDone: () => void;
 }) {
-  const payable = transfer.parts.filter((p) => !p.against);
-  const against = transfer.parts.filter((p) => p.against);
-  const [picked, setPicked] = useState<Set<string>>(() => new Set(payable.map((p) => p.trip_token)));
+  const { from, to, parts } = transfer; // card direction: `from` owes `to` overall
+  const [picked, setPicked] = useState<Set<string>>(() => new Set(parts.map((p) => p.trip_token)));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const all = picked.size === payable.length;
-  const total = (all ? transfer.parts : payable.filter((p) => picked.has(p.trip_token)))
-    .reduce((s, p) => s + (p.against ? -p.amount : p.amount), 0);
+  const chosen = parts.filter((p) => picked.has(p.trip_token));
+  const all = chosen.length === parts.length;
+  // net in the card's direction; negative means the ticked trips lean the other way
+  const net = chosen.reduce((s, p) => s + (p.against ? -p.amount : p.amount), 0);
+  const half = 0.5 / 10 ** decimals(currency);
+  const label = Math.abs(net) < half ? "even, no money changes hands"
+    : net > 0 ? `${from} pays ${to} ${fmtUnits(net, currency)}`
+    : `${to} pays ${from} ${fmtUnits(-net, currency)}`;
   const canEdit = (tt: string) => trips.find((t) => t.token === tt)?.access === "edit";
-  const blocked = transfer.parts.filter((p) => (all || picked.has(p.trip_token)) && !canEdit(p.trip_token));
+  const blocked = chosen.filter((p) => !canEdit(p.trip_token));
+  const toggle = (tt: string, on: boolean) => {
+    const next = new Set(picked);
+    if (on) next.add(tt); else next.delete(tt);
+    setPicked(next);
+  };
 
   const submit = async () => {
     setBusy(true); setError("");
     try {
-      const settle = all ? transfer.parts : payable.filter((p) => picked.has(p.trip_token));
-      for (const p of settle) {
+      for (const p of chosen) {
         const minor = Math.round(p.amount * 10 ** decimals(currency));
         if (minor <= 0) continue;
         await api.post(`/api/trips/${p.trip_token}/settlements`, {
@@ -291,31 +298,23 @@ function MarkPaidModal({ transfer, currency, trips, onClose, onDone }: {
   return (
     <div className="modal-bg" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h3>{transfer.from} paid {transfer.to}</h3>
+        <h3>Settle {from} ↔ {to}</h3>
         <label className="expense-row">
           <span><input type="checkbox" checked={all}
-            onChange={(e) => setPicked(new Set(e.target.checked ? payable.map((p) => p.trip_token) : []))} /> All trips</span>
-          <b>{fmtUnits(transfer.amount, currency)}</b>
+            onChange={(e) => setPicked(new Set(e.target.checked ? parts.map((p) => p.trip_token) : []))} /> All trips</span>
+          <b>{from} owes {to} {fmtUnits(transfer.amount, currency)}</b>
         </label>
-        {payable.map((p) => (
+        {parts.map((p) => (
           <label key={p.trip_token} className="expense-row" style={{ paddingLeft: 22 }}>
             <span><input type="checkbox" checked={picked.has(p.trip_token)}
-              onChange={(e) => {
-                const next = new Set(picked);
-                if (e.target.checked) next.add(p.trip_token); else next.delete(p.trip_token);
-                setPicked(next);
-              }} /> {p.trip_name}</span>
-            <span>{fmtUnits(p.amount, currency)}</span>
+              onChange={(e) => toggle(p.trip_token, e.target.checked)} /> {p.trip_name}</span>
+            <span className={p.against ? "muted" : ""}>
+              {p.against ? `${to} owes ${from}` : `${from} owes ${to}`} {fmtUnits(p.amount, currency)}
+            </span>
           </label>
         ))}
-        {against.map((p) => (
-          <div key={p.trip_token} className="expense-row muted" style={{ paddingLeft: 22 }}>
-            <span>{p.trip_name} — {transfer.to} owes {transfer.from}, netted in</span>
-            <span>−{fmtUnits(p.amount, currency)}</span>
-          </div>
-        ))}
-        {against.length > 0 && !all && (
-          <p className="muted">Trips where {transfer.to} owes {transfer.from} are only settled with "All trips".</p>
+        {chosen.some((p) => p.against) && chosen.some((p) => !p.against) && (
+          <p className="muted">Each ticked trip is recorded in full so it ends at zero; in real life only the net changes hands.</p>
         )}
         {blocked.length > 0 && (
           <p className="warn">Pick your name in {blocked.map((p) => p.trip_name).join(", ")} first — you can only record payments in trips you've joined.</p>
@@ -323,8 +322,8 @@ function MarkPaidModal({ transfer, currency, trips, onClose, onDone }: {
         {error && <div className="error">{error}</div>}
         <div className="modal-btns">
           <button className="link" onClick={onClose}>Cancel</button>
-          <button className="primary" disabled={busy || picked.size === 0 || blocked.length > 0} onClick={submit}>
-            Record {fmtUnits(total, currency)}
+          <button className="primary" disabled={busy || chosen.length === 0 || blocked.length > 0} onClick={submit}>
+            Record: {label}
           </button>
         </div>
       </div>
