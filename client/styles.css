@@ -340,3 +340,27 @@ details summary { cursor: pointer; padding: 8px 0; }
 .award-card .award-emoji { font-size: 26px; }
 .award-card .award-title { font-weight: 700; font-size: 13px; margin: 3px 0; }
 .award-card .award-members { font-size: 13px; color: var(--accent); font-weight: 600; }
+
+/* ---------- range date picker ---------- */
+/* compact + centered inside modals; DayPicker's root class is .rdp */
+.rdp-root.rdp-root {
+  margin: 0 auto;
+  --rdp-day-height: 30px;
+  --rdp-day-width: 34px;
+  --rdp-day_button-height: 28px;
+  --rdp-day_button-width: 28px;
+  --rdp-nav-height: 30px;
+  --rdp-day_button-border-radius: 8px;
+  font-size: 12.5px;
+}
+.rdp-month_caption { padding: 0; font-size: 14px; }
+.rdp-weekday { font-size: 10px; color: var(--muted); }
+.rdp-weekdays th { padding: 2px 0; }
+.rdp-chevron { width: 16px; height: 16px; }
+.rdp-selected .rdp-day_button {
+  background: var(--accent) !important;
+  color: #fdfbf7 !important;
+}
+.rdp-range_middle { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.rdp-day_button:hover { background: var(--chip); }
+.modal { max-height: 90vh; overflow-y: auto; }
