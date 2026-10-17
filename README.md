@@ -68,3 +68,5 @@ server wts public on # start cloudflared (needs TUNNEL_TOKEN in ~/wts/.env)
 Layout: repo at `~/wts`, SQLite at `~/wts/data/data.db` (bind-mounted into the container), backups in `~/wts/data/backups/` (keeps 10). Ports: `127.0.0.1`, tailnet `100.127.5.96`, LAN `192.168.8.208` — all on `:8081`.
 
 Going public needs one-time Cloudflare steps: create a tunnel, add a public hostname pointing at `http://wts-server:8081`, paste `TUNNEL_TOKEN` into `~/wts/.env`, set `BASE_URL=https://<hostname>` in the same file, then `server wts public on`.
+
+Public URL: `https://jiathe.dev/watsthesplit` — client built with `VITE_BASE=/watsthesplit/` (`--build-arg` in `wts_build`), server strips `BASE_PATH` in `server/index.ts`. Tunnel: point the hostname/path at `http://wts-server:8081`.
