@@ -3,7 +3,7 @@ import qrcode from "qrcode-generator";
 import { api, BASE, Config, toMinor, fmt, fmtUnits, decimals, flag, CATEGORIES } from "./api.ts";
 import { addRecent } from "./main.tsx";
 import { CurrencyPicker } from "./CurrencyPicker.tsx";
-import { SignIn } from "./SignIn.tsx";
+import { SignInButton } from "./SignIn.tsx";
 type Member = { id: string; name: string; linked: boolean; used: boolean; is_me: boolean; opted_out_fun?: boolean };
 type ExpenseSum = {
   id: string; name: string; currency: string; total_minor: number;
@@ -193,7 +193,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
           </div>
           {!data.signed_in && (
             <div style={{ marginTop: 14 }}>
-              <SignIn compact onSignedIn={() => { reloadMe(); load(); }} />
+              <SignInButton onSignedIn={() => { reloadMe(); load(); }} />
             </div>
           )}
         </div>
@@ -243,18 +243,12 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
         {!me.linked && (
           <>
             <span className="muted">not signed in — anyone can claim you</span>
-            <button className="link" onClick={() => setShowSignIn(!showSignIn)}>Sign in</button>
+            <SignInButton onSignedIn={() => { reloadMe(); load(); }} />
           </>
         )}
         <button className="link" onClick={() => setShowInvite(!showInvite)}>Invite</button>
         <button className="link" onClick={() => setShowSettings(!showSettings)}>Settings</button>
       </div>
-
-      {showSignIn && !me.linked && (
-        <div className="card">
-          <SignIn compact onSignedIn={() => { setShowSignIn(false); reloadMe(); load(); }} />
-        </div>
-      )}
 
       {showInvite && (
         <div className="card">

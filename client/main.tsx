@@ -5,7 +5,7 @@ import TripView from "./Trip.tsx";
 import ExpenseView from "./Expense.tsx";
 import { CurrencyPicker } from "./CurrencyPicker.tsx";
 import "./styles.css";
-import { SignIn } from "./SignIn.tsx";
+import { SignInButton } from "./SignIn.tsx";
 
 type Me = { user: { email: string; name: string | null } | null };
 
@@ -67,8 +67,8 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
             </>
           ) : (
             <>
-              <span className="muted">Sign in to keep your identity across devices</span>
-              <SignIn compact onSignedIn={reloadMe} />
+              <span className="muted">Keep your identity across devices</span>
+              <SignInButton onSignedIn={reloadMe} />
             </>
           )}
         </div>

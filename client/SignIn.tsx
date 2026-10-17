@@ -68,3 +68,21 @@ export function SignIn({ onSignedIn, compact }: { onSignedIn: () => void; compac
     </div>
   );
 }
+
+// Button that opens the sign-in flow in a modal.
+export function SignInButton({ onSignedIn, label = "Sign in" }: { onSignedIn: () => void; label?: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button className="link" onClick={() => setOpen(true)}>{label}</button>
+      {open && (
+        <div className="modal-bg" onClick={() => setOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Sign in</h3>
+            <SignIn onSignedIn={() => { setOpen(false); onSignedIn(); }} />
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
