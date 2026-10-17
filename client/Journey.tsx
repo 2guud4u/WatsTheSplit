@@ -1,5 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { api, BASE, fmtUnits, flag } from "./api.ts";
+import { useTripEvents } from "./hooks.ts";
+import { CopyButton } from "./CopyButton.tsx";
 
 type TripRef = { token: string; name: string; settle_currency?: string };
 type Person = { key: string; name: string; memberIds: string[]; linked: boolean };
@@ -19,7 +21,6 @@ type JourneyData = {
 export default function JourneyView({ token }: { token: string }) {
   const [data, setData] = useState<JourneyData | null>(null);
   const [err, setErr] = useState("");
-  const [copied, setCopied] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
 
   const load = useCallback(async () => {
@@ -32,15 +33,7 @@ export default function JourneyView({ token }: { token: string }) {
   }, [load]);
 
   // live-refresh off every member trip's event stream
-  useEffect(() => {
-    if (!data) return;
-    const sources = data.trips.map((t) => {
-      const es = new EventSource(`${BASE}/api/trips/${t.token}/events`);
-      es.onmessage = () => load();
-      return es;
-    });
-    return () => sources.forEach((es) => es.close());
-  }, [data?.trips.map((t) => t.token).join(","), load]);
+  useTripEvents(data?.trips.map((t) => t.token) ?? null, load);
 
   if (err) return <p className="error">{err === "no_access" ? "You need access to at least one trip in this journey — open it through a trip link." : err}</p>;
   if (!data) return <p className="muted">Loading…</p>;
@@ -77,10 +70,7 @@ export default function JourneyView({ token }: { token: string }) {
       <div className="card">
         <div className="row">
           <input className="wide" readOnly value={link} onFocus={(e) => e.target.select()} />
-          <button onClick={async () => {
-            await navigator.clipboard?.writeText(link);
-            setCopied(true); setTimeout(() => setCopied(false), 1500);
-          }}>{copied ? "Copied ✓" : "Copy"}</button>
+          <CopyButton text={link} />
         </div>
         <p className="muted">Opens for anyone who can open a member trip — no extra password.</p>
       </div>

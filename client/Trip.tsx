@@ -6,6 +6,8 @@ import { CurrencyPicker } from "./CurrencyPicker.tsx";
 import { SignInButton } from "./SignIn.tsx";
 import { RangePicker } from "./main.tsx";
 import type { DateRange } from "react-day-picker";
+import { useTripEvents } from "./hooks.ts";
+import { CopyButton } from "./CopyButton.tsx";
 type Member = { id: string; name: string; linked: boolean; used: boolean; is_me: boolean; opted_out_fun?: boolean };
 type ExpenseSum = {
   id: string; name: string; currency: string; total_minor: number;
@@ -97,7 +99,6 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
   const [showSettings, setShowSettings] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
   const [showSignIn, setShowSignIn] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [settleFrom, settleTo] = [settle.from, settle.to];
 
   const load = useCallback(async () => {
@@ -126,12 +127,11 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
       }
       load();
     })();
-    const es = new EventSource(`${BASE}/api/trips/${token}/events`);
-    es.onmessage = () => load();
     const onFocus = () => load();
     addEventListener("focus", onFocus);
-    return () => { es.close(); removeEventListener("focus", onFocus); };
+    return () => { removeEventListener("focus", onFocus); };
   }, [token]);
+  useTripEvents([token], load);
 
   if (needsPassword) {
     return (
@@ -259,11 +259,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
         <div className="card">
           <div className="row">
             <input className="wide" readOnly value={inviteUrl} onFocus={(e) => e.target.select()} />
-            <button onClick={async () => {
-              await navigator.clipboard?.writeText(inviteUrl);
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1500);
-            }}>{copied ? "Copied ✓" : "Copy"}</button>
+            <CopyButton text={inviteUrl} />
           </div>
           <QR text={inviteUrl} />
           <p className="muted">Anyone with this link can join — keep it private.</p>

@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { api, BASE, toMinor, fmt, decimals, CATEGORIES, CURRENCY_COUNTRIES } from "./api.ts";
 import { CurrencyPicker } from "./CurrencyPicker.tsx";
+import { useTripEvents } from "./hooks.ts";
 
 type Member = { id: string; name: string };
 type Item = { id: string; name: string; price_minor: number; sharers: string[] };
@@ -81,12 +82,8 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
     catch { location.hash = `#/t/${token}`; }
   }, [expenseId, token]);
 
-  useEffect(() => {
-    load();
-    const es = new EventSource(`${BASE}/api/trips/${token}/events`);
-    es.onmessage = () => load();
-    return () => es.close();
-  }, [token, expenseId]);
+  useEffect(() => { load(); }, [load]);
+  useTripEvents([token], load);
 
   if (!data) return <p className="muted">Loading…</p>;
   const e = data.expense;

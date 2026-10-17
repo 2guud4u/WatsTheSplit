@@ -2,6 +2,10 @@ import { db } from "./db.ts";
 import { decimals, isCurrency, CURRENCIES } from "./currencies.ts";
 import { crossRate, startFxLoop, latestProviderTimestamp } from "./fx.ts";
 import { seedDemo, DEMO_TOKEN } from "./demo.ts";
+import { effectiveShares, expensePayload, tripBalances, journeyBalance, journeyTrips, journeyPeople, paidMembers, type JourneyMember } from "./ledger.ts";
+import * as notify from "./notify.ts";
+import { funBoard } from "./wrapped.ts";
+import type { Session, Member, Trip, Journey, ExpenseRow } from "./types.ts";
 
 const PORT = Number(process.env.PORT ?? 8081);
 
@@ -11,19 +15,6 @@ const BASE_URL = (process.env.BASE_URL ?? `http://localhost:${PORT}`).replace(/\
 const BASE_PATH = (process.env.BASE_PATH ?? "").replace(/\/$/, "");
 const COOKIE = "wts_session";
 const DIST = new URL("../dist", import.meta.url).pathname;
-
-type Session = { token: string; user_sub: string | null };
-type Member = {
-  id: string; trip_token: string; name: string; user_sub: string | null; opted_out_fun?: number; detail_views?: number;
-};
-type Trip = {
-  token: string; name: string; start_date: string | null; end_date: string | null;
-  trip_currency: string; settle_currency: string; password_hash: string | null;
-  password_text: string | null;
-  created_at: string;
-  password_ver: number; fun_leaderboard: number; created_by_token: string | null;
-};
-type Journey = { token: string; name: string; settle_currency: string; created_at: string };
 
 const json = (data: unknown, init: ResponseInit = {}) =>
   new Response(JSON.stringify(data), {
@@ -92,6 +83,53 @@ function hasAccess(s: Session, trip: Trip): boolean {
   return c?.password_ver === trip.password_ver;
 }
 
+
+// Trips the session may open (used for the journey trip-picker and access).
+function accessibleTrips(s: Session): Trip[] {
+  const consented = db.query<{ trip_token: string }, [string]>(
+    "SELECT trip_token FROM consents WHERE session_token = ?",
+  ).all(s.token).map((r) => r.trip_token);
+  const linked = s.user_sub
+    ? db.query<{ trip_token: string }, [string]>(
+        "SELECT trip_token FROM members WHERE user_sub = ?",
+      ).all(s.user_sub).map((r) => r.trip_token)
+    : [];
+  const tokens = [...new Set([...consented, ...linked])];
+  return tokens.map((t) => qTrip.get(t)).filter((t): t is Trip => !!t && hasAccess(s, t));
+}
+
+// Access: any session that can open at least one member trip.
+function journeyAccess(s: Session, j: Journey): boolean {
+  return journeyTrips(j).some((t) => hasAccess(s, t));
+}
+
+// Route guards: session -> entity -> access -> acting member.
+// Each returns the context, or a Response the route returns as-is.
+type TripCtx = { s: Session; t: Trip; me: Member | null };
+function withTrip(req: Request, token: string): TripCtx | Response {
+  const s = sessionFrom(req)!;
+  const o = openTrip(token, s);
+  if (o instanceof Response) return o;
+  return { s, t: o.trip, me: myMember(s, o.trip) };
+}
+type ExpenseCtx = TripCtx & { e: ExpenseRow };
+function withExpense(req: Request, id: string): ExpenseCtx | Response {
+  const s = sessionFrom(req)!;
+  const e = db.query<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(id);
+  if (!e) return err(404, "expense_not_found");
+  const o = openTrip(e.trip_token, s);
+  if (o instanceof Response) return o;
+  return { s, e, t: o.trip, me: myMember(s, o.trip) };
+}
+function withJourney(req: Request, token: string): { s: Session; j: Journey } | Response {
+  const s = sessionFrom(req)!;
+  const j = qJourney.get(token);
+  if (!j) return err(404, "journey_not_found");
+  if (!journeyAccess(s, j)) return err(403, "no_access");
+  return { s, j };
+}
+
+
 const memberIsUsed = (tripToken: string, memberId: string): boolean => {
   const checks: [string, string[]][] = [
     ["SELECT COUNT(*) n FROM expenses WHERE trip_token = ? AND payer_member_id = ?", [tripToken, memberId]],
@@ -108,472 +146,7 @@ const memberIsUsed = (tripToken: string, memberId: string): boolean => {
 
 // ---------- domain payload builders ----------
 
-function sharesForExpense(expenseId: string): { member_id: string; share_minor: number | null }[] {
-  return db.query<{ member_id: string; share_minor: number | null }, [string]>(
-    "SELECT member_id, share_minor FROM expense_participants WHERE expense_id = ?",
-  ).all(expenseId);
-}
-
-type ExpenseRow = {
-  id: string; trip_token: string; name: string; currency: string;
-  total_minor: number; payer_member_id: string | null; category: string | null;
-  rate: number | null; rate_provider: string | null; rate_timestamp: string | null;
-  recorded_at: string; last_edited_by: string | null; last_edited_at: string;
-  created_by_member_id?: string | null;
-  paid_out: number;
-};
-
-// Per-participant effective share in expense minor units.
-// Hybrid: each member's share = typed share_minor + their portion of items
-// (each item splits price equally among its sharers). NULL share_minor means
-// "equal share of whatever is left" (the remainder): rest = total - fixed
-// shares - item prices, spread evenly over participants whose share_minor is
-// NULL. Rounding dust goes to the last remainder participant. Expenses with
-// no NULL participants can still be unassigned/over — shown as badges.
-function effectiveShares(e: ExpenseRow): { member_id: string; minor: number | null }[] {
-  const itemRows = db.query<{ member_id: string; price_minor: number; n: number }, [string]>(
-    `SELECT s.member_id, i.price_minor, (SELECT COUNT(*) FROM item_sharers x WHERE x.item_id = i.id) AS n
-     FROM item_sharers s JOIN items i ON i.id = s.item_id WHERE i.expense_id = ?`,
-  ).all(e.id);
-  const itemByMember: Record<string, number> = {};
-  let itemTotal = 0;
-  for (const r of itemRows) {
-    itemByMember[r.member_id] = (itemByMember[r.member_id] ?? 0) + r.price_minor / r.n;
-  }
-  itemTotal = db.query<{ t: number }, [string]>(
-    "SELECT COALESCE(SUM(price_minor),0) t FROM items WHERE expense_id = ?",
-  ).get(e.id)!.t;
-  const parts = db.query<{ member_id: string; share_minor: number | null; paid: number }, [string]>(
-    "SELECT member_id, share_minor, paid FROM expense_participants WHERE expense_id = ?",
-  ).all(e.id);
-  const ids = new Set(parts.map((p) => p.member_id));
-  for (const id of Object.keys(itemByMember)) ids.add(id);
-  const remIds = parts.filter((p) => p.share_minor === null).map((p) => p.member_id);
-  const fixed = parts.reduce((a, p) => a + (p.share_minor ?? 0), 0);
-  const rest = Math.max(0, e.total_minor - fixed - itemTotal);
-  const eachRest = remIds.length ? Math.floor(rest / remIds.length) : 0;
-  let remLeftover = rest - eachRest * remIds.length;
-  return [...ids].map((id) => {
-    const itemPart = itemByMember[id] ?? 0;
-    const typed = parts.find((p) => p.member_id === id)?.share_minor ?? null;
-    let minor = Math.round(itemPart);
-    if (typed !== null) minor += typed;
-    else if (remIds.includes(id)) {
-      minor += eachRest + (remLeftover > 0 ? 1 : 0);
-      remLeftover -= remLeftover > 0 ? 1 : 0;
-    }
-    return { member_id: id, minor: minor > 0 || typed !== null || remIds.includes(id) ? minor : null };
-  });
-}
-
-// Set of participant member_ids whose share is marked paid.
-function paidMembers(expenseId: string): Set<string> {
-  return new Set(db.query<{ member_id: string }, [string]>(
-    "SELECT member_id FROM expense_participants WHERE expense_id = ? AND paid = 1",
-  ).all(expenseId).map((r) => r.member_id));
-}
-
-function expensePayload(e: ExpenseRow, detail: boolean) {
-  const shares = effectiveShares(e);
-  const assigned = shares.reduce((a, s) => a + (s.minor ?? 0), 0);
-  const unassigned = e.total_minor - assigned;
-  const base: Record<string, unknown> = {
-    id: e.id, name: e.name, currency: e.currency, total_minor: e.total_minor,
-    payer_member_id: e.payer_member_id, category: e.category, recorded_at: e.recorded_at,
-    rate: e.rate, rate_provider: e.rate_provider, rate_timestamp: e.rate_timestamp,
-    last_edited_by: e.last_edited_by, last_edited_at: e.last_edited_at,
-    assigned_minor: assigned, unassigned_minor: unassigned, over: unassigned < 0,
-    paid_out: paidMembers(e.id).size > 0 && shares.every((s) => s.minor === null || paidMembers(e.id).has(s.member_id)),
-    paid_count: paidMembers(e.id).size,
-    share_count: shares.filter((s) => s.minor !== null).length,
-  };
-  if (!detail) return base;
-  base.participants = db.query<{ member_id: string; share_minor: number | null; name: string; paid: number }, [string]>(
-    `SELECT p.member_id, p.share_minor, p.paid, m.name FROM expense_participants p
-     JOIN members m ON m.id = p.member_id WHERE p.expense_id = ?`,
-  ).all(e.id);
-  base.items = db.query<{ id: string; name: string; price_minor: number }, [string]>(
-    "SELECT id, name, price_minor FROM items WHERE expense_id = ? ORDER BY rowid",
-  ).all(e.id).map((i) => ({
-    ...i,
-    sharers: db.query<{ member_id: string }, [string]>(
-      "SELECT member_id FROM item_sharers WHERE item_id = ?",
-    ).all(i.id).map((s) => s.member_id),
-  }));
-  base.effective_shares = shares;
-  base.photos = db.query<{ id: string }, [string]>(
-    "SELECT id FROM expense_photos WHERE expense_id = ? ORDER BY created_at",
-  ).all(e.id).map((p) => p.id);
-  return base;
-}
-// Silly awards computed from trip data. Everything in settle-currency units.
-function funBoard(t: Trip) {
-  const members = db.query<Member, [string]>(
-    "SELECT * FROM members WHERE trip_token = ? ORDER BY name",
-  ).all(t.token);
-  if (members.length === 0) return { awards: [] };
-  const out = new Set(members.filter((m) => m.opted_out_fun).map((m) => m.id));
-  const dec = decimals(t.settle_currency);
-  const paid: Record<string, number> = {};      // settle units paid
-  const consumed: Record<string, number> = {};  // settle units owed
-  const catShare: Record<string, number> = {};  // "cat>member" -> share minor (expense currency)
-  const catTotal: Record<string, number> = {};  // category -> total share minor
-  const payerCount: Record<string, number> = {};
-  const partCount: Record<string, number> = {};
-  const pairShare: Record<string, number> = {};   // "a>b" -> co-share count
-  const tripleShare: Record<string, number> = {}; // "a>b>c" -> co-share count
-  const owed: Record<string, number> = {};      // net per member for "most in debt"
-  const settlePair: Record<string, number> = {};
-  const createdCount: Record<string, number> = {}; // expenses created per member
-  const typedCount: Record<string, number> = {};   // exact shares entered per member
-  const biggestShare: Record<string, number> = {}; // largest single share (settle units)
-
-  for (const e of db.query<ExpenseRow, [string]>(
-    "SELECT * FROM expenses WHERE trip_token = ?",
-  ).all(t.token)) {
-    const rate = e.currency === t.settle_currency ? 1 : e.rate;
-    if (e.created_by_member_id && !out.has(e.created_by_member_id))
-      createdCount[e.created_by_member_id] = (createdCount[e.created_by_member_id] ?? 0) + 1;
-    if (rate === null) continue;
-    if (e.payer_member_id && !out.has(e.payer_member_id)) {
-      paid[e.payer_member_id] = (paid[e.payer_member_id] ?? 0) + (e.total_minor / 10 ** decimals(e.currency)) * rate;
-      payerCount[e.payer_member_id] = (payerCount[e.payer_member_id] ?? 0) + 1;
-    }
-    const sharers = effectiveShares(e).filter((s) => (s.minor ?? 0) > 0);
-    for (const s of sharers) {
-      if (out.has(s.member_id)) continue;
-      const units = (s.minor! / 10 ** decimals(e.currency)) * rate;
-      consumed[s.member_id] = (consumed[s.member_id] ?? 0) + units;
-      partCount[s.member_id] = (partCount[s.member_id] ?? 0) + 1;
-      biggestShare[s.member_id] = Math.max(biggestShare[s.member_id] ?? 0, units);
-      if (s.member_id !== e.payer_member_id) {
-        owed[s.member_id] = (owed[s.member_id] ?? 0) + units;
-      }
-      if (e.category) {
-        const ck = `${e.category}>${s.member_id}`;
-        catShare[ck] = (catShare[ck] ?? 0) + units;
-        catTotal[e.category] = (catTotal[e.category] ?? 0) + units;
-      }
-    }
-    for (const p of sharesForExpense(e.id))
-      if (p.share_minor !== null && !out.has(p.member_id))
-        typedCount[p.member_id] = (typedCount[p.member_id] ?? 0) + 1;
-    const ids = sharers.map((s) => s.member_id).filter((id) => !out.has(id)).sort();
-    for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
-      const k = `${ids[i]}>${ids[j]}`;
-      pairShare[k] = (pairShare[k] ?? 0) + 1;
-      for (let l = j + 1; l < ids.length; l++) {
-        const tk = `${ids[i]}>${ids[j]}>${ids[l]}`;
-        tripleShare[tk] = (tripleShare[tk] ?? 0) + 1;
-      }
-    }
-  }
-  for (const s of db.query<{ from_member: string; to_member: string; amount_minor: number }, [string]>(
-    "SELECT from_member, to_member, amount_minor FROM settlements WHERE trip_token = ?",
-  ).all(t.token)) {
-    if (out.has(s.from_member) || out.has(s.to_member)) continue;
-    const key = [s.from_member, s.to_member].sort().join(">");
-    settlePair[key] = (settlePair[key] ?? 0) + 1;
-    owed[s.from_member] = (owed[s.from_member] ?? 0) - s.amount_minor / 10 ** dec;
-  }
-
-  const top = (rec: Record<string, number>, min = 0): { key: string; v: number } | null => {
-    let best: { key: string; v: number } | null = null;
-    for (const k of Object.keys(rec)) {
-      if (rec[k] > (best?.v ?? min)) best = { key: k, v: rec[k] };
-    }
-    return best;
-  };
-  const name = (id: string) => members.find((m) => m.id === id)?.name ?? "?";
-  const fmtU = (v: number) => `${v.toFixed(decimals(t.settle_currency))} ${t.settle_currency}`;
-  const awards: Award[] = [];
-
-  type Award = { emoji: string; title: string; members: string[]; detail: string; score?: number };
-  const totalSpend = Object.values(consumed).reduce((a, b) => a + b, 0) || 1;
-  const nExp = Object.values(payerCount).reduce((a, b) => a + b, 0) || 1;
-  const debtTop = top(owed);
-  if (debtTop && debtTop.v > 0) awards.push({ emoji: "🧾", title: "Chief IOU Officer", members: [name(debtTop.key)], detail: `${fmtU(debtTop.v)} owed`, score: 30 + debtTop.v / totalSpend });
-  const paidTop = top(paid);
-  if (paidTop) awards.push({ emoji: "💸", title: "Sugar Daddy", members: [name(paidTop.key)], detail: `${fmtU(paidTop.v)} fronted`, score: 29 + paidTop.v / totalSpend });
-  const gap: Record<string, number> = {};
-  for (const m of members) gap[m.id] = (consumed[m.id] ?? 0) - (paid[m.id] ?? 0);
-  const freeTop = top(gap);
-  if (freeTop && freeTop.v > 0) awards.push({ emoji: "🫥", title: "Freeloader-in-Chief", members: [name(freeTop.key)], detail: `${fmtU(freeTop.v)} net`, score: 28 + freeTop.v / totalSpend });
-  // one silly champion title per category
-  const catChamp: Record<string, [string, string]> = {
-    Food: ["🍽️", "MVP · Most Voracious Person"], Drinks: ["🍻", "Chief Hydration Officer"],
-    Coffee: ["☕", "The Caffeine Addict"], Groceries: ["🛒", "The Snack Barron"],
-    Transport: ["🚕", "The Backseat Driver"], Lodging: ["🏨", "The Sleep King"],
-    Activities: ["🎟️", "The Adrenaline Junkie"], Tickets: ["🎫", "The Queue Jumper"],
-    Shopping: ["🛍️", "The Retail Therapist"], Souvenirs: ["🧸", "The Trinket Hoarder"],
-    Fees: ["💳", "The Fine Print Fan"], Nightlife: ["🌙", "The Night Owl"],
-    Wellness: ["💆", "The Zen Master"], Other: ["📦", "The Miscellaneous Maniac"],
-  };
-  for (const [cat, [emoji, title]] of Object.entries(catChamp)) {
-    const t2 = top(Object.fromEntries(Object.keys(catShare)
-      .filter((k) => k.startsWith(`${cat}>`))
-      .map((k) => [k.split(">")[1], catShare[k]])));
-    if (t2) awards.push({ emoji, title, members: [name(t2.key)], detail: `biggest ${cat.toLowerCase()} share`, score: 15 + (t2.v / (catTotal[cat] || 1)) });
-  }
-  const payerTop = top(payerCount);
-  if (payerTop) awards.push({ emoji: "🏧", title: "Human ATM", members: [name(payerTop.key)], detail: `paid for ${payerTop.v} expense${payerTop.v > 1 ? "s" : ""}`, score: 20 + payerTop.v / nExp });
-  const partTop = top(partCount);
-  if (partTop) awards.push({ emoji: "🤝", title: "Split King/Queen", members: [name(partTop.key)], detail: `in on ${partTop.v} splits`, score: 20 + partTop.v / nExp });
-  const nosyTop = top(Object.fromEntries(
-    members.filter((m) => !out.has(m.id) && (m.detail_views ?? 0) > 0)
-      .map((m) => [m.id, m.detail_views ?? 0])));
-  if (nosyTop) awards.push({ emoji: "🕵️", title: "The Receipt Auditor", members: [name(nosyTop.key)], detail: `checked the math ${nosyTop.v} time${nosyTop.v > 1 ? "s" : ""} — trusts no one`, score: 10 + Math.min(nosyTop.v / 5, 1) });
-  const taxTop = top(createdCount);
-  if (taxTop && taxTop.v >= 2) awards.push({ emoji: "🧮", title: "The Tax Man", members: [name(taxTop.key)], detail: `filed ${taxTop.v} expenses — receipts for everything`, score: 21 + taxTop.v / nExp });
-  const accTop = top(typedCount);
-  if (accTop && accTop.v >= 2) awards.push({ emoji: "🤓", title: "The Accountant", members: [name(accTop.key)], detail: `typed ${accTop.v} exact shares — nobody trusts equal splits`, score: 10 + Math.min(accTop.v / (nExp * 2), 1) });
-  const bigTop = top(biggestShare);
-  if (bigTop && bigTop.v > 0) awards.push({ emoji: "🍾", title: "Champagne Tastes", members: [name(bigTop.key)], detail: `biggest single share: ${fmtU(bigTop.v)}`, score: 19 + bigTop.v / totalSpend });
-  const tiny = Object.fromEntries(Object.keys(consumed).filter((k) => consumed[k] > 0).map((k) => [k, consumed[k]]));
-  const pinKey = Object.keys(tiny).length ? Object.keys(tiny).reduce((a, b) => tiny[a] < tiny[b] ? a : b) : null;
-  if (pinKey) awards.push({ emoji: "🤏", title: "Penny Pincher", members: [name(pinKey)], detail: `only ${fmtU(tiny[pinKey])} of total damage`, score: 9 + (1 - tiny[pinKey] / totalSpend) });
-  const ghosts = members.filter((m) => !out.has(m.id) && !paid[m.id] && !consumed[m.id]);
-  if (ghosts.length && (Object.keys(paid).length || Object.keys(consumed).length))
-    awards.push({ emoji: "👻", title: "The Ghost", members: ghosts.map((m) => m.name), detail: "never paid, never on a receipt", score: 8 + Math.min(ghosts.length / members.length, 1) });
-
-  const txTop = top(settlePair);
-  if (txTop) awards.push({ emoji: "💞", title: "Transactional Couple", members: txTop.key.split(">").map(name), detail: `${txTop.v} payments between them`, score: 12 + Math.min(txTop.v / 3, 1) });
-  const duoTop = top(pairShare);
-  if (duoTop && duoTop.v >= 2) awards.push({ emoji: "🍔", title: "Codependent Diners", members: duoTop.key.split(">").map(name), detail: `${duoTop.v} shared expenses`, score: 14 + duoTop.v / nExp });
-  const trioTop = top(tripleShare);
-  if (trioTop && trioTop.v >= 2) awards.push({ emoji: "⚔️", title: "Three Musketeers", members: trioTop.key.split(">").map(name), detail: `${trioTop.v} items together`, score: 14 + trioTop.v / nExp });
-
-  const catTop = top(catTotal);
-  const catSquad: Record<string, string> = {
-    Food: "The Buffet Battalion", Drinks: "The Liquid Assets", Coffee: "The Bean Counters",
-    Groceries: "The Cart Pushers", Transport: "The Wheel Deal", Lodging: "The Pillow Talk Posse",
-    Activities: "The Thrill Seekers", Tickets: "The Turnstile Gang", Shopping: "The Retail Therapists",
-    Souvenirs: "The Trinket Tribe", Fees: "The Fine Print Club", Nightlife: "The Last Call Crew",
-    Wellness: "The Spa Society", Other: "The Miscellaneous Society",
-  };
-  if (catTop) awards.push({ emoji: "🏆", title: catSquad[catTop.key] ?? `The ${catTop.key} Squad`, members: [], detail: `most spent on ${catTop.key}`, score: 22 + catTotal[catTop.key] / totalSpend });
-  awards.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-  // everyone gets an award before anyone gets two: first pass covers new members
-  const eligible = members.filter((m) => !out.has(m.id)).length;
-  const covered = new Set<string>();
-  const picked: Award[] = [];
-  const rest: Award[] = [];
-  for (const a of awards) {
-    const fresh = a.members.filter((n) => !covered.has(n));
-    if (fresh.length > 0 && covered.size < eligible) {
-      picked.push(a);
-      fresh.forEach((n) => covered.add(n));
-    } else {
-      rest.push(a);
-    }
-  }
-  picked.push(...rest.slice(0, Math.max(0, 7 - picked.length)));
-  return { awards: picked.slice(0, 7).map(({ score: _s, ...a }) => a) };
-}
-
-function balancesForTrip(t: Trip) {
-  const members = db.query<Member, [string]>(
-    "SELECT * FROM members WHERE trip_token = ? ORDER BY name",
-  ).all(t.token);
-  const dec = decimals(t.settle_currency);
-  const owed: Record<string, number> = {}; // "from>to" -> units of settle currency
-  // per-pair contribution log for the "math" view
-  const log: Record<string, {
-    kind: "expense" | "settlement";
-    label: string; share_minor?: number; currency?: string; rate?: number | null;
-    converted?: number; amount_minor?: number;
-  }[]> = {};
-  for (const e of db.query<ExpenseRow, [string]>(
-    "SELECT * FROM expenses WHERE trip_token = ?",
-  ).all(t.token)) {
-    if (!e.payer_member_id) continue;
-    if (e.paid_out) continue; // payer marked it reimbursed — shares count for nothing
-    const rate = e.currency === t.settle_currency ? 1 : e.rate;
-    if (rate === null) continue;
-    for (const s of effectiveShares(e)) {
-      if (s.minor === null || s.member_id === e.payer_member_id) continue;
-      const units = (s.minor / 10 ** decimals(e.currency)) * rate;
-      const key = `${s.member_id}>${e.payer_member_id}`;
-      owed[key] = (owed[key] ?? 0) + units;
-      (log[key] ??= []).push({
-        kind: "expense", label: e.name, share_minor: s.minor,
-        currency: e.currency, rate, converted: units,
-      });
-    }
-  }
-  for (const s of db.query<{ from_member: string; to_member: string; amount_minor: number }, [string]>(
-    "SELECT from_member, to_member, amount_minor FROM settlements WHERE trip_token = ?",
-  ).all(t.token)) {
-    const key = `${s.from_member}>${s.to_member}`;
-    owed[key] = (owed[key] ?? 0) - s.amount_minor / 10 ** dec;
-    (log[key] ??= []).push({
-      kind: "settlement", label: "paid", amount_minor: -s.amount_minor,
-    });
-  }
-  // net pairwise
-  const pairs: { from: string; to: string; amount: number }[] = [];
-  const seen = new Set<string>();
-  for (const key of Object.keys(owed)) {
-    const [a, b] = key.split(">");
-    const rev = `${b}>${a}`;
-    if (seen.has(key) || seen.has(rev)) continue;
-    seen.add(key); seen.add(rev);
-    const net = (owed[key] ?? 0) - (owed[rev] ?? 0);
-    const epsilon = 0.5 / 10 ** dec;
-    if (Math.abs(net) < epsilon) continue;
-    pairs.push(net > 0
-      ? { from: a, to: b, amount: Math.round(net * 10 ** dec) / 10 ** dec }
-      : { from: b, to: a, amount: Math.round(-net * 10 ** dec) / 10 ** dec });
-  }
-  return { members, pairs, log };
-}
-
-// ---------- journeys ----------
-// A Journey reads each member trip's per-person net position (in that trip's
-// settle currency), converts to the Journey Currency at the current rate,
-// sums per Person, then simplifies to minimal transfers.
-
-// Trips the session may open (used for the journey trip-picker and access).
-function accessibleTrips(s: Session): Trip[] {
-  const consented = db.query<{ trip_token: string }, [string]>(
-    "SELECT trip_token FROM consents WHERE session_token = ?",
-  ).all(s.token).map((r) => r.trip_token);
-  const linked = s.user_sub
-    ? db.query<{ trip_token: string }, [string]>(
-        "SELECT trip_token FROM members WHERE user_sub = ?",
-      ).all(s.user_sub).map((r) => r.trip_token)
-    : [];
-  const tokens = [...new Set([...consented, ...linked])];
-  return tokens.map((t) => qTrip.get(t)).filter((t): t is Trip => !!t && hasAccess(s, t));
-}
-
-function journeyTrips(j: Journey): Trip[] {
-  return db.query<{ trip_token: string }, [string]>(
-    "SELECT trip_token FROM journey_trips WHERE journey_token = ?",
-  ).all(j.token).map((r) => qTrip.get(r.trip_token)).filter((t): t is Trip => !!t);
-}
-
-// Access: any session that can open at least one member trip.
-function journeyAccess(s: Session, j: Journey): boolean {
-  return journeyTrips(j).some((t) => hasAccess(s, t));
-}
-
-// Per-member net in settle-currency *units* (positive = owed money).
-function netPositions(t: Trip): Map<string, number> {
-  const dec = decimals(t.settle_currency);
-  const net = new Map<string, number>();
-  const add = (id: string, v: number) => net.set(id, (net.get(id) ?? 0) + v);
-  for (const e of db.query<ExpenseRow, [string]>(
-    "SELECT * FROM expenses WHERE trip_token = ?",
-  ).all(t.token)) {
-    if (!e.payer_member_id) continue;
-    const paid = paidMembers(e.id);
-    const rate = e.currency === t.settle_currency ? 1 : e.rate;
-    if (rate === null) continue;
-    for (const s of effectiveShares(e)) {
-      if (s.minor === null || paid.has(s.member_id)) continue;
-      const units = (s.minor / 10 ** decimals(e.currency)) * rate;
-      add(e.payer_member_id, units);
-      if (s.member_id !== e.payer_member_id) add(s.member_id, -units);
-    }
-  }
-  for (const s of db.query<{ from_member: string; to_member: string; amount_minor: number }, [string]>(
-    "SELECT from_member, to_member, amount_minor FROM settlements WHERE trip_token = ?",
-  ).all(t.token)) {
-    add(s.from_member, s.amount_minor / 10 ** dec);
-    add(s.to_member, -s.amount_minor / 10 ** dec);
-  }
-  return net;
-}
-
-type JourneyMember = Member & { trip_name?: string };
-
-// Person key: linked members share their user_sub; manual merges share a
-// group_id; otherwise the member stands alone.
-function journeyPeople(j: Journey): { persons: Map<string, { name: string; memberIds: string[]; linked: boolean }>; keyOf: (m: JourneyMember) => string } {
-  const merges = db.query<{ member_id: string; group_id: string }, [string]>(
-    "SELECT member_id, group_id FROM journey_merges WHERE journey_token = ?",
-  ).all(j.token);
-  const groupOf = new Map(merges.map((m) => [m.member_id, m.group_id]));
-  const allMembers: JourneyMember[] = [];
-  for (const t of journeyTrips(j)) {
-    for (const m of db.query<Member, [string]>(
-      "SELECT * FROM members WHERE trip_token = ? ORDER BY name",
-    ).all(t.token)) allMembers.push({ ...m, trip_name: t.name });
-  }
-  const persons = new Map<string, { name: string; memberIds: string[]; linked: boolean }>();
-  const keyOf = (m: JourneyMember) =>
-    groupOf.get(m.id) ?? (m.user_sub ? `u:${m.user_sub}` : `m:${m.id}`);
-  // prefer the linked member's name for a group's label
-  const label = (ids: string[]) => {
-    const ms = ids.map((id) => allMembers.find((m) => m.id === id)!).filter(Boolean);
-    return (ms.find((m) => m.user_sub) ?? ms[0])?.name ?? "?";
-  };
-  const byKey = new Map<string, string[]>();
-  for (const m of allMembers) {
-    const k = keyOf(m);
-    byKey.set(k, [...(byKey.get(k) ?? []), m.id]);
-  }
-  for (const [k, ids] of byKey) {
-    persons.set(k, { name: label(ids), memberIds: ids, linked: ids.some((id) => allMembers.find((m) => m.id === id)?.user_sub) });
-  }
-  return { persons, keyOf };
-}
-
-function journeyBalance(j: Journey) {
-  const { persons, keyOf } = journeyPeople(j);
-  const jDec = decimals(j.settle_currency);
-  const net = new Map<string, number>(); // person key -> journey-currency units
-  const perTrip: { token: string; name: string; settle_currency: string; converted: boolean; balances: { person: string; net: number }[] }[] = [];
-  for (const t of journeyTrips(j)) {
-    const nets = netPositions(t);
-    const conv = t.settle_currency === j.settle_currency
-      ? { rate: 1 }
-      : crossRate(t.settle_currency, j.settle_currency);
-    const members = db.query<Member, [string]>("SELECT * FROM members WHERE trip_token = ?").all(t.token);
-    const rows: { person: string; net: number }[] = [];
-    for (const [mid, v] of nets) {
-      const m = members.find((mm) => mm.id === mid);
-      if (!m || Math.abs(v) < 1e-9) continue;
-      const key = keyOf(m);
-      const person = persons.get(key)?.name ?? m.name;
-      rows.push({ person, net: v });
-      if (conv) net.set(key, (net.get(key) ?? 0) + v * conv.rate);
-    }
-    perTrip.push({ token: t.token, name: t.name, settle_currency: t.settle_currency, converted: !!conv, balances: rows.sort((a, b) => a.net - b.net) });
-  }
-  // greedy simplify: largest debtor pays largest creditor
-  const debtors = [...net.entries()].filter(([, v]) => v < -1e-6).map(([k, v]) => ({ k, v: -v })).sort((a, b) => b.v - a.v);
-  const creditors = [...net.entries()].filter(([, v]) => v > 1e-6).map(([k, v]) => ({ k, v })).sort((a, b) => b.v - a.v);
-  const transfers: { from: string; to: string; amount: number }[] = [];
-  let i = 0, jj = 0;
-  while (i < debtors.length && jj < creditors.length) {
-    const pay = Math.min(debtors[i].v, creditors[jj].v);
-    transfers.push({
-      from: persons.get(debtors[i].k)?.name ?? "?",
-      to: persons.get(creditors[jj].k)?.name ?? "?",
-      amount: Math.round(pay * 10 ** jDec) / 10 ** jDec,
-    });
-    debtors[i].v -= pay; creditors[jj].v -= pay;
-    if (debtors[i].v < 1e-6) i++;
-    if (creditors[jj].v < 1e-6) jj++;
-  }
-  const positions = [...net.entries()].map(([k, v]) => ({
-    person: persons.get(k)?.name ?? "?", net: Math.round(v * 10 ** jDec) / 10 ** jDec,
-  })).sort((a, b) => a.net - b.net);
-  return { transfers, positions, perTrip };
-}
-
 // ---------- SSE ----------
-const listeners = new Map<string, Set<ReadableStreamDefaultController>>();
-function broadcast(tripToken: string) {
-  const set = listeners.get(tripToken);
-  if (!set) return;
-  for (const c of set) {
-    try { c.enqueue(`data: {"t":${Date.now()}}\n\n`); } catch { set.delete(c); }
-  }
-}
-
 // ---------- helpers ----------
 function edited(e: { id: string }, memberName: string | null) {
   db.run("UPDATE expenses SET last_edited_by = ?, last_edited_at = ? WHERE id = ?", [
@@ -748,7 +321,7 @@ const routes: Route[] = [
     if (o instanceof Response) return o;
     const t = o.trip;
     const me = myMember(s, t);
-    const { members, pairs, log } = balancesForTrip(t);
+    const { members, pairs, log } = tripBalances(t);
     return json({
       trip: {
         token: t.token, name: t.name, start_date: t.start_date, end_date: t.end_date,
@@ -812,10 +385,9 @@ const routes: Route[] = [
   }],
 
   [/^\/api\/trips\/([A-Za-z0-9]+)\/settings$/, "PATCH", async (req, m, body) => {
-    const s = sessionFrom(req)!;
-    const o = openTrip(m[1], s);
-    if (o instanceof Response) return o;
-    const t = o.trip;
+    const g = withTrip(req, m[1]);
+    if (g instanceof Response) return g;
+    const { s, t, me } = g;
     if (body.name !== undefined) db.run("UPDATE trips SET name = ? WHERE token = ?", [String(body.name), t.token]);
     if (body.start_date !== undefined) db.run("UPDATE trips SET start_date = ? WHERE token = ?", [body.start_date === null ? null : String(body.start_date), t.token]);
     if (body.end_date !== undefined) db.run("UPDATE trips SET end_date = ? WHERE token = ?", [body.end_date === null ? null : String(body.end_date), t.token]);
@@ -844,18 +416,17 @@ const routes: Route[] = [
           [s.token, t.token, ver]);
       }
     }
-    broadcast(t.token);
+    notify.trip(t.token);
     return json({ ok: true });
   }],
 
   [/^\/api\/trips\/([A-Za-z0-9]+)$/, "DELETE", async (req, m, body) => {
-    const s = sessionFrom(req)!;
-    const o = openTrip(m[1], s);
-    if (o instanceof Response) return o;
-    const t = o.trip;
+    const g = withTrip(req, m[1]);
+    if (g instanceof Response) return g;
+    const { s, t, me } = g;
     if (body.name !== t.name) return err(400, "name_mismatch");
     db.run("DELETE FROM trips WHERE token = ?", [t.token]);
-    broadcast(t.token);
+    notify.trip(t.token);
     return json({ ok: true });
   }],
 
@@ -892,7 +463,7 @@ const routes: Route[] = [
     }
     db.run("INSERT OR REPLACE INTO claims (session_token, trip_token, member_id) VALUES (?,?,?)",
       [s.token, t.token, member.id]);
-    broadcast(t.token);
+    notify.trip(t.token);
     return json({ ok: true, member_id: member.id }, { headers });
   }],
 
@@ -906,7 +477,7 @@ const routes: Route[] = [
     const id = crypto.randomUUID();
     db.run("INSERT INTO members (id, trip_token, name, user_sub, created_at) VALUES (?,?,?,NULL,?)",
       [id, o.trip.token, name, now()]);
-    broadcast(o.trip.token);
+    notify.trip(o.trip.token);
     return json({ id });
   }],
 
@@ -927,7 +498,7 @@ const routes: Route[] = [
       if (!me || me.id !== mem.id) return err(403, "not_your_member");
       db.run("UPDATE members SET opted_out_fun = ? WHERE id = ?", [body.opted_out_fun ? 1 : 0, mem.id]);
     }
-    broadcast(mem.trip_token);
+    notify.trip(mem.trip_token);
     return json({ ok: true });
   }],
 
@@ -941,7 +512,7 @@ const routes: Route[] = [
     if (mem.id === myMember(s, o.trip)?.id) return err(400, "cannot_remove_self");
     db.run("DELETE FROM claims WHERE member_id = ?", [mem.id]);
     db.run("DELETE FROM members WHERE id = ?", [mem.id]);
-    broadcast(mem.trip_token);
+    notify.trip(mem.trip_token);
     return json({ ok: true });
   }],
 
@@ -957,11 +528,9 @@ const routes: Route[] = [
 
   // ---- expenses ----
   [/^\/api\/trips\/([A-Za-z0-9]+)\/expenses$/, "POST", async (req, m, body) => {
-    const s = sessionFrom(req)!;
-    const o = openTrip(m[1], s);
-    if (o instanceof Response) return o;
-    const t = o.trip;
-    const me = myMember(s, t);
+    const g = withTrip(req, m[1]);
+    if (g instanceof Response) return g;
+    const { s, t, me } = g;
     const name = String(body.name ?? "").trim();
     if (!name) return err(400, "name_required");
     const currency = String(body.currency ?? t.trip_currency).toUpperCase();
@@ -986,7 +555,7 @@ const routes: Route[] = [
         [id, mm.id]);
     }
     lockRate(id, currency, t.settle_currency);
-    broadcast(t.token);
+    notify.trip(t.token);
     return json({ id });
   }],
 
@@ -1009,13 +578,9 @@ const routes: Route[] = [
   }],
 
   [/^\/api\/expenses\/([A-Za-z0-9-]+)$/, "PATCH", async (req, m, body) => {
-    const s = sessionFrom(req)!;
-    const e = db.query<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(m[1]);
-    if (!e) return err(404, "expense_not_found");
-    const o = openTrip(e.trip_token, s);
-    if (o instanceof Response) return o;
-    const t = o.trip;
-    const me = myMember(s, t);
+    const g = withExpense(req, m[1]);
+    if (g instanceof Response) return g;
+    const { s, e, t, me } = g;
     if (body.name !== undefined) db.run("UPDATE expenses SET name = ? WHERE id = ?", [String(body.name), e.id]);
     if (body.total_minor !== undefined) {
       const v = Number(body.total_minor);
@@ -1053,7 +618,7 @@ const routes: Route[] = [
       }
     }
     edited(e, me?.name ?? null);
-    broadcast(t.token);
+    notify.trip(t.token);
     return json({ ok: true });
   }],
 
@@ -1064,35 +629,27 @@ const routes: Route[] = [
     const o = openTrip(e.trip_token, s);
     if (o instanceof Response) return o;
     db.run("DELETE FROM expenses WHERE id = ?", [e.id]);
-    broadcast(o.trip.token);
+    notify.trip(o.trip.token);
     return json({ ok: true });
   }],
 
   // Per-person paid toggle: the payer or the person themself.
   [/^\/api\/expenses\/([A-Za-z0-9-]+)\/paid$/, "PUT", async (req, m, body) => {
-    const s = sessionFrom(req)!;
-    const e = db.query<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(m[1]);
-    if (!e) return err(404, "expense_not_found");
-    const o = openTrip(e.trip_token, s);
-    if (o instanceof Response) return o;
-    const t = o.trip;
-    const me = myMember(s, t);
+    const g = withExpense(req, m[1]);
+    if (g instanceof Response) return g;
+    const { s, e, t, me } = g;
     const mid = String(body.member_id ?? "");
     if (me?.id !== e.payer_member_id && me?.id !== mid) return err(403, "payer_or_self_only");
     db.run("INSERT OR IGNORE INTO expense_participants (expense_id, member_id, share_minor, paid) VALUES (?,?,NULL,0)", [e.id, mid]);
     db.run("UPDATE expense_participants SET paid = ? WHERE expense_id = ? AND member_id = ?", [body.paid ? 1 : 0, e.id, mid]);
-    broadcast(t.token);
+    notify.trip(t.token);
     return json({ ok: true });
   }],
 
   [/^\/api\/expenses\/([A-Za-z0-9-]+)\/participants$/, "PUT", async (req, m, body) => {
-    const s = sessionFrom(req)!;
-    const e = db.query<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(m[1]);
-    if (!e) return err(404, "expense_not_found");
-    const o = openTrip(e.trip_token, s);
-    if (o instanceof Response) return o;
-    const t = o.trip;
-    const me = myMember(s, t);
+    const g = withExpense(req, m[1]);
+    if (g instanceof Response) return g;
+    const { s, e, t, me } = g;
     const memberId = String(body.member_id ?? "");
     const on = !!body.on;
     const mem = qMember.get(memberId);
@@ -1105,18 +662,14 @@ const routes: Route[] = [
         (SELECT id FROM items WHERE expense_id = ?)`, [memberId, e.id]);
     }
     edited(e, me?.name ?? null);
-    broadcast(t.token);
+    notify.trip(t.token);
     return json({ ok: true });
   }],
 
   [/^\/api\/expenses\/([A-Za-z0-9-]+)\/shares$/, "PUT", async (req, m, body) => {
-    const s = sessionFrom(req)!;
-    const e = db.query<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(m[1]);
-    if (!e) return err(404, "expense_not_found");
-    const o = openTrip(e.trip_token, s);
-    if (o instanceof Response) return o;
-    const t = o.trip;
-    const me = myMember(s, t);
+    const g = withExpense(req, m[1]);
+    if (g instanceof Response) return g;
+    const { s, e, t, me } = g;
     const memberId = String(body.member_id ?? "");
     const value = body.share_minor === null ? null : Number(body.share_minor);
     const mem = qMember.get(memberId);
@@ -1127,18 +680,14 @@ const routes: Route[] = [
       [e.id, memberId, value],
     );
     edited(e, me?.name ?? null);
-    broadcast(t.token);
+    notify.trip(t.token);
     return json({ ok: true });
   }],
 
   [/^\/api\/expenses\/([A-Za-z0-9-]+)\/split$/, "POST", async (req, m, body) => {
-    const s = sessionFrom(req)!;
-    const e = db.query<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(m[1]);
-    if (!e) return err(404, "expense_not_found");
-    const o = openTrip(e.trip_token, s);
-    if (o instanceof Response) return o;
-    const t = o.trip;
-    const me = myMember(s, t);
+    const g = withExpense(req, m[1]);
+    if (g instanceof Response) return g;
+    const { s, e, t, me } = g;
     const type = String(body.type);
     const parts = db.query<{ member_id: string; share_minor: number | null }, [string]>(
       "SELECT member_id, share_minor FROM expense_participants WHERE expense_id = ?",
@@ -1186,19 +735,15 @@ const routes: Route[] = [
       }
     } else return err(400, "bad_split_type");
     edited(e, me?.name ?? null);
-    broadcast(t.token);
+    notify.trip(t.token);
     return json({ ok: true });
   }],
 
   // ---- items ----
   [/^\/api\/expenses\/([A-Za-z0-9-]+)\/items$/, "POST", async (req, m, body) => {
-    const s = sessionFrom(req)!;
-    const e = db.query<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(m[1]);
-    if (!e) return err(404, "expense_not_found");
-    const o = openTrip(e.trip_token, s);
-    if (o instanceof Response) return o;
-    const t = o.trip;
-    const me = myMember(s, t);
+    const g = withExpense(req, m[1]);
+    if (g instanceof Response) return g;
+    const { s, e, t, me } = g;
     const name = String(body.name ?? "").trim() || "Item";
     const price = Number(body.price_minor ?? 0);
     const sharers: string[] = Array.isArray(body.sharers) ? body.sharers : [];
@@ -1210,7 +755,7 @@ const routes: Route[] = [
       db.run("INSERT OR IGNORE INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,NULL)", [e.id, mid]);
     }
     edited(e, me?.name ?? null);
-    broadcast(t.token);
+    notify.trip(t.token);
     return json({ id: itemId });
   }],
 
@@ -1234,7 +779,7 @@ const routes: Route[] = [
       }
     }
     edited(e, me?.name ?? null);
-    broadcast(o.trip.token);
+    notify.trip(o.trip.token);
     return json({ ok: true });
   }],
 
@@ -1248,7 +793,7 @@ const routes: Route[] = [
     const o = openTrip(e.trip_token, s);
     if (o instanceof Response) return o;
     db.run("DELETE FROM items WHERE id = ?", [item.id]);
-    broadcast(o.trip.token);
+    notify.trip(o.trip.token);
     return json({ ok: true });
   }],
 
@@ -1269,7 +814,7 @@ const routes: Route[] = [
     db.run("INSERT INTO expense_photos (id, expense_id, mime, data, created_at) VALUES (?,?,?,?,?)",
       [id, e.id, mime, buf, now()]);
     edited(e, me?.name ?? null);
-    broadcast(o.trip.token);
+    notify.trip(o.trip.token);
     return json({ id });
   }],
 
@@ -1297,17 +842,15 @@ const routes: Route[] = [
     const me = myMember(s, o.trip);
     db.run("DELETE FROM expense_photos WHERE id = ?", [p.id]);
     edited(e, me?.name ?? null);
-    broadcast(o.trip.token);
+    notify.trip(o.trip.token);
     return json({ ok: true });
   }],
 
   // ---- settlements ----
   [/^\/api\/trips\/([A-Za-z0-9]+)\/settlements$/, "POST", async (req, m, body) => {
-    const s = sessionFrom(req)!;
-    const o = openTrip(m[1], s);
-    if (o instanceof Response) return o;
-    const t = o.trip;
-    const me = myMember(s, t);
+    const g = withTrip(req, m[1]);
+    if (g instanceof Response) return g;
+    const { s, t, me } = g;
     const from = qMember.get(String(body.from_member ?? ""));
     const to = qMember.get(String(body.to_member ?? ""));
     if (!from || !to || from.trip_token !== t.token || to.trip_token !== t.token || from.id === to.id)
@@ -1317,7 +860,7 @@ const routes: Route[] = [
     const id = crypto.randomUUID();
     db.run("INSERT INTO settlements (id, trip_token, from_member, to_member, amount_minor, created_at, created_by) VALUES (?,?,?,?,?,?,?)",
       [id, t.token, from.id, to.id, amount, now(), me?.name ?? null]);
-    broadcast(t.token);
+    notify.trip(t.token);
     return json({ id });
   }],
 
@@ -1330,7 +873,7 @@ const routes: Route[] = [
     const o = openTrip(st.trip_token, s);
     if (o instanceof Response) return o;
     db.run("DELETE FROM settlements WHERE id = ?", [st.id]);
-    broadcast(st.trip_token);
+    notify.trip(st.trip_token);
     return json({ ok: true });
   }],
 
@@ -1424,10 +967,9 @@ const routes: Route[] = [
   }],
 
   [/^\/api\/journeys\/([A-Za-z0-9]+)\/trips$/, "POST", async (req, m, body) => {
-    const s = sessionFrom(req)!;
-    const j = qJourney.get(m[1]);
-    if (!j) return err(404, "journey_not_found");
-    if (!journeyAccess(s, j)) return err(403, "no_access");
+    const g = withJourney(req, m[1]);
+    if (g instanceof Response) return g;
+    const { s, j } = g;
     const tt = String(body.trip_token ?? "");
     const t = qTrip.get(tt);
     if (!t) return err(404, "trip_not_found");
@@ -1435,27 +977,25 @@ const routes: Route[] = [
     if (db.query("SELECT 1 FROM journey_trips WHERE trip_token = ?").get(tt))
       return err(409, "already_in_journey");
     db.run("INSERT INTO journey_trips (journey_token, trip_token) VALUES (?,?)", [j.token, tt]);
-    for (const tr of journeyTrips(j)) broadcast(tr.token);
+    notify.journey(j.token);
     return json({ ok: true });
   }],
 
   [/^\/api\/journeys\/([A-Za-z0-9]+)\/trips\/([A-Za-z0-9]+)$/, "DELETE", async (req, m) => {
-    const s = sessionFrom(req)!;
-    const j = qJourney.get(m[1]);
-    if (!j) return err(404, "journey_not_found");
-    if (!journeyAccess(s, j)) return err(403, "no_access");
+    const g = withJourney(req, m[1]);
+    if (g instanceof Response) return g;
+    const { s, j } = g;
     db.run("DELETE FROM journey_trips WHERE journey_token = ? AND trip_token = ?", [j.token, m[2]]);
     db.run("DELETE FROM journey_merges WHERE journey_token = ? AND member_id IN (SELECT id FROM members WHERE trip_token = ?)", [j.token, m[2]]);
-    for (const tr of journeyTrips(j)) broadcast(tr.token);
-    broadcast(m[2]);
+    notify.journey(j.token);
+    notify.trip(m[2]);
     return json({ ok: true });
   }],
 
   [/^\/api\/journeys\/([A-Za-z0-9]+)\/merge$/, "POST", async (req, m, body) => {
-    const s = sessionFrom(req)!;
-    const j = qJourney.get(m[1]);
-    if (!j) return err(404, "journey_not_found");
-    if (!journeyAccess(s, j)) return err(403, "no_access");
+    const g = withJourney(req, m[1]);
+    if (g instanceof Response) return g;
+    const { s, j } = g;
     const ids = (Array.isArray(body.member_ids) ? body.member_ids : []).map(String);
     const inJourney = new Set(journeyTrips(j).flatMap((t) =>
       db.query<{ id: string }, [string]>("SELECT id FROM members WHERE trip_token = ?").all(t.token).map((r) => r.id)));
@@ -1470,17 +1010,16 @@ const routes: Route[] = [
     gid ??= crypto.randomUUID();
     for (const id of valid)
       db.run("INSERT OR REPLACE INTO journey_merges (journey_token, member_id, group_id) VALUES (?,?,?)", [j.token, id, gid]);
-    for (const tr of journeyTrips(j)) broadcast(tr.token);
+    notify.journey(j.token);
     return json({ ok: true, group_id: gid });
   }],
 
   [/^\/api\/journeys\/([A-Za-z0-9]+)\/merge\/([A-Za-z0-9-]+)$/, "DELETE", async (req, m) => {
-    const s = sessionFrom(req)!;
-    const j = qJourney.get(m[1]);
-    if (!j) return err(404, "journey_not_found");
-    if (!journeyAccess(s, j)) return err(403, "no_access");
+    const g = withJourney(req, m[1]);
+    if (g instanceof Response) return g;
+    const { s, j } = g;
     db.run("DELETE FROM journey_merges WHERE journey_token = ? AND member_id = ?", [j.token, m[2]]);
-    for (const tr of journeyTrips(j)) broadcast(tr.token);
+    notify.journey(j.token);
     return json({ ok: true });
   }],
 
@@ -1495,11 +1034,10 @@ const routes: Route[] = [
       start(c) {
         ctrl = c;
         c.enqueue(": connected\n\n");
-        if (!listeners.has(token)) listeners.set(token, new Set());
-        listeners.get(token)!.add(c);
+        notify.addListener(token, c);
       },
       cancel() {
-        listeners.get(token)?.delete(ctrl);
+        notify.removeListener(token, ctrl);
       },
     });
     return new Response(stream, {
