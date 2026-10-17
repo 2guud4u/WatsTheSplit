@@ -98,9 +98,24 @@ function accessibleTrips(s: Session): Trip[] {
   return tokens.map((t) => qTrip.get(t)).filter((t): t is Trip => !!t && hasAccess(s, t));
 }
 
-// Access: any session that can open at least one member trip.
+// Journey viewer: session opened a shared journey link (grant) or can already
+// open a member trip. Trip access implies journey access, not vice versa.
+function journeyGrant(s: Session, journeyToken: string): boolean {
+  return !!db.query("SELECT 1 FROM journey_access WHERE session_token = ? AND journey_token = ?")
+    .get(s.token, journeyToken);
+}
 function journeyAccess(s: Session, j: Journey): boolean {
-  return journeyTrips(j).some((t) => hasAccess(s, t));
+  return journeyGrant(s, j.token) || journeyTrips(j).some((t) => hasAccess(s, t));
+}
+
+// A journey link grants read access to all member trips; edit still needs
+// the trip's own password or a member claim (which grants edit access).
+function canViewTrip(s: Session, trip: Trip): boolean {
+  if (hasAccess(s, trip)) return true;
+  const jt = db.query<{ journey_token: string }, [string]>(
+    "SELECT journey_token FROM journey_trips WHERE trip_token = ?",
+  ).get(trip.token);
+  return !!jt && journeyGrant(s, jt.journey_token);
 }
 
 // Route guards: session -> entity -> access -> acting member.
@@ -199,6 +214,15 @@ function openTrip(token: string, s: Session): { trip: Trip } | Response {
   if (!trip) return err(404, "trip_not_found");
   if (!hasAccess(s, trip)) return err(401, "password_required", { protected: true });
   return { trip };
+}
+
+// Read-only variant of openTrip: trip link members plus journey viewers.
+function openTripView(token: string, s: Session): { trip: Trip; edit: boolean } | Response {
+  const trip = qTrip.get(token);
+  if (!trip) return err(404, "trip_not_found");
+  if (hasAccess(s, trip)) return { trip, edit: true };
+  if (canViewTrip(s, trip)) return { trip, edit: false };
+  return err(401, "password_required", { protected: true });
 }
 
 // Case-insensitive name check within a trip.
@@ -317,7 +341,7 @@ const routes: Route[] = [
 
   [/^\/api\/trips\/([A-Za-z0-9]+)$/, "GET", async (req, m) => {
     const s = sessionFrom(req) ?? { token: "", user_sub: null };
-    const o = openTrip(m[1], s);
+    const o = openTripView(m[1], s);
     if (o instanceof Response) return o;
     const t = o.trip;
     const me = myMember(s, t);
@@ -327,9 +351,10 @@ const routes: Route[] = [
         token: t.token, name: t.name, start_date: t.start_date, end_date: t.end_date,
         created_at: t.created_at,
         trip_currency: t.trip_currency, settle_currency: t.settle_currency,
-        has_password: !!t.password_hash, password: t.password_text, fun_leaderboard: !!t.fun_leaderboard,
+        has_password: !!t.password_hash, password: o.edit ? t.password_text : null, fun_leaderboard: !!t.fun_leaderboard,
       },
       me: me ? { id: me.id, name: me.name, linked: !!me.user_sub, opted_out_fun: !!me.opted_out_fun } : null,
+      access: o.edit ? "edit" : "view",
       signed_in: !!s.user_sub,
       is_creator: t.created_by_token !== null && t.created_by_token === s.token,
       members: members.map((mm) => ({
@@ -433,7 +458,7 @@ const routes: Route[] = [
   // ---- members ----
   [/^\/api\/trips\/([A-Za-z0-9]+)\/claim$/, "POST", async (req, m, body) => {
     const { session: s, headers } = ensureSession(req);
-    const o = openTrip(m[1], s);
+    const o = openTripView(m[1], s);
     if (o instanceof Response) return o;
     const t = o.trip;
     const memberId = String(body.member_id ?? "");
@@ -463,6 +488,9 @@ const routes: Route[] = [
     }
     db.run("INSERT OR REPLACE INTO claims (session_token, trip_token, member_id) VALUES (?,?,?)",
       [s.token, t.token, member.id]);
+    // claiming grants edit access even for journey viewers (they never typed the password)
+    db.run("INSERT OR REPLACE INTO consents (session_token, trip_token, password_ver) VALUES (?,?,?)",
+      [s.token, t.token, t.password_ver]);
     notify.trip(t.token);
     return json({ ok: true, member_id: member.id }, { headers });
   }],
@@ -563,7 +591,7 @@ const routes: Route[] = [
     const s = sessionFrom(req) ?? { token: "", user_sub: null };
     const e = db.query<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(m[1]);
     if (!e) return err(404, "expense_not_found");
-    const o = openTrip(e.trip_token, s);
+    const o = openTripView(e.trip_token, s);
     if (o instanceof Response) return o;
     const t = o.trip;
     const members = db.query<Member, [string]>(
@@ -572,6 +600,7 @@ const routes: Route[] = [
     return json({
       expense: expensePayload(e, true),
       trip: { token: t.token, name: t.name, settle_currency: t.settle_currency },
+      access: o.edit ? "edit" : "view",
       members: members.map((mm) => ({ id: mm.id, name: mm.name })),
       me: s.token ? (myMember(s, t)?.id ?? null) : null,
     });
@@ -955,7 +984,15 @@ const routes: Route[] = [
     const { transfers, positions, perTrip } = journeyBalance(j);
     return json({
       journey: { token: j.token, name: j.name, settle_currency: j.settle_currency },
-      trips: trips.map((t) => ({ token: t.token, name: t.name, settle_currency: t.settle_currency })),
+      trips: trips.map((t) => ({
+        token: t.token, name: t.name, settle_currency: t.settle_currency,
+        access: hasAccess(s, t) ? "edit" : "view",
+        members: db.query<Member, [string]>("SELECT * FROM members WHERE trip_token = ? ORDER BY name")
+          .all(t.token).map((mm) => ({ id: mm.id, name: mm.name, linked: !!mm.user_sub })),
+        expenses: db.query<ExpenseRow, [string]>(
+          "SELECT * FROM expenses WHERE trip_token = ? ORDER BY recorded_at DESC",
+        ).all(t.token).map((e) => expensePayload(e, false)),
+      })),
       persons: [...persons.entries()].map(([k, p]) => ({ key: k, ...p })),
       members: allM.map((mm) => ({ id: mm.id, name: mm.name, trip_name: mm.trip_name, key: keyOf(mm), linked: !!mm.user_sub })),
       mergeHints: hints,
@@ -964,6 +1001,17 @@ const routes: Route[] = [
         .filter((t) => !db.query("SELECT 1 FROM journey_trips WHERE trip_token = ?").get(t.token))
         .map((t) => ({ token: t.token, name: t.name })),
     });
+  }],
+
+  // journey link: opening it (POST join) grants read access to every member trip
+  [/^\/api\/journeys\/([A-Za-z0-9]+)\/join$/, "POST", async (req, m) => {
+    const { session: s, headers } = ensureSession(req);
+    const j = qJourney.get(m[1]);
+    if (!j) return err(404, "journey_not_found");
+    db.run("INSERT OR IGNORE INTO journey_access (session_token, journey_token, created_at) VALUES (?,?,?)",
+      [s.token, j.token, now()]);
+    for (const t of journeyTrips(j)) notify.trip(t.token);
+    return json({ ok: true }, { headers });
   }],
 
   [/^\/api\/journeys\/([A-Za-z0-9]+)\/trips$/, "POST", async (req, m, body) => {

@@ -22,6 +22,7 @@ type TripData = {
     trip_currency: string; settle_currency: string; has_password: boolean; password: string | null; fun_leaderboard: boolean;
   };
   me: { id: string; name: string; linked: boolean; opted_out_fun?: boolean } | null;
+  access: "edit" | "view";
   journey: { token: string; name: string } | null;
   signed_in: boolean;
   is_creator: boolean;
@@ -160,53 +161,60 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
   const t = data.trip;
   const currencies = config?.currencies ?? [];
 
+  const me = data.me;
+  const readOnly = data.access === "view";
+
   // ---------- who are you ----------
-  if (!data.me) {
-    const claimables = data.members;
+  // Journey viewers (readOnly) get the claim card on top and the trip below;
+  // everyone else must pick a name before seeing content.
+  const ClaimCard = () => (
+    <div className="card">
+      <h2 style={{ marginTop: 0 }}>Who are you?</h2>
+      <p className="muted">
+        Pick your name or add a new one{readOnly ? " — or just browse below" : ""}.{" "}
+        {!data.signed_in && !readOnly && (
+          <>Without signing in, <b>anyone with the trip link can pick your name later</b>.{" "}
+            <button className="link" onClick={() => {
+              const btn = document.getElementById("googbtn");
+              btn?.scrollIntoView();
+            }}>Sign in</button> to lock yours.</>
+        )}
+      </p>
+      <div className="row" style={{ marginBottom: 10 }}>
+        {data.members.map((m) => (
+          <button key={m.id} className="member-chip"
+            disabled={m.linked && !data.signed_in}
+            onClick={async () => { await api.post(`/api/trips/${token}/claim`, { member_id: m.id }); load(); }}>
+            <Avatar name={m.name} />{m.name}{m.linked && <span className="pill">🔒</span>}
+          </button>
+        ))}
+      </div>
+      <div className="row">
+        <input className="wide" value={newName} placeholder="Your name"
+          onChange={(e) => setNewName(e.target.value)} />
+        <button className="primary" disabled={!newName.trim()} onClick={async () => {
+          await api.post(`/api/trips/${token}/claim`, { name: newName.trim() });
+          setNewName(""); load();
+        }}>Join as new</button>
+      </div>
+      {!data.signed_in && !readOnly && (
+        <div style={{ marginTop: 14 }}>
+          <SignInButton onSignedIn={() => { reloadMe(); load(); }} />
+        </div>
+      )}
+    </div>
+  );
+
+  if (!me && !readOnly) {
     return (
       <>
         <h1>{t.name}</h1>
-        <div className="card">
-          <h2 style={{ marginTop: 0 }}>Who are you?</h2>
-          <p className="muted">
-            Pick your name or add a new one.{" "}
-            {!data.signed_in && (
-              <>Without signing in, <b>anyone with the trip link can pick your name later</b>.{" "}
-                <button className="link" onClick={() => {
-                  const btn = document.getElementById("googbtn");
-                  btn?.scrollIntoView();
-                }}>Sign in</button> to lock yours.</>
-            )}
-          </p>
-          <div className="row" style={{ marginBottom: 10 }}>
-            {claimables.map((m) => (
-              <button key={m.id} className="member-chip"
-                disabled={m.linked && !data.signed_in}
-                onClick={async () => { await api.post(`/api/trips/${token}/claim`, { member_id: m.id }); load(); }}>
-                <Avatar name={m.name} />{m.name}{m.linked && <span className="pill">🔒</span>}
-              </button>
-            ))}
-          </div>
-          <div className="row">
-            <input className="wide" value={newName} placeholder="Your name"
-              onChange={(e) => setNewName(e.target.value)} />
-            <button className="primary" disabled={!newName.trim()} onClick={async () => {
-              await api.post(`/api/trips/${token}/claim`, { name: newName.trim() });
-              setNewName(""); load();
-            }}>Join as new</button>
-          </div>
-          {!data.signed_in && (
-            <div style={{ marginTop: 14 }}>
-              <SignInButton onSignedIn={() => { reloadMe(); load(); }} />
-            </div>
-          )}
-        </div>
+        <ClaimCard />
       </>
     );
   }
 
-  const me = data.me;
-  const myPairs = data.balances.filter((p) => p.from === me.id || p.to === me.id);
+  const myPairs = data.balances.filter((p) => p.from === me?.id || p.to === me?.id);
   const inviteUrl = `${location.origin}${BASE}/#/t/${token}${t.password ? `?pw=${encodeURIComponent(t.password)}` : ""}`;
 
   const createExpense = async () => {
@@ -214,7 +222,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
     const r = await api.post(`/api/trips/${token}/expenses`, {
       name: expName.trim(), total_minor: toMinor(expTotal, expCur ?? t.trip_currency),
       currency: expCur ?? t.trip_currency,
-      payer_member_id: expPayer || me.id,
+      payer_member_id: expPayer || me?.id,
     });
     setExpName(""); setExpTotal("");
     location.hash = `#/t/${token}/e/${r.id}`;
@@ -243,16 +251,18 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
         {t.has_password && " · 🔒"}
         {data.journey && <> · part of <a href={`#/j/${data.journey.token}`}>{data.journey.name}</a></>}
       </p>
+
+      {readOnly && !me && <ClaimCard />}
       <div className="row" style={{ marginBottom: 12 }}>
-        <span className="member-chip"><Avatar name={me.name} /><b>{me.name}</b>{me.linked ? " ✓" : ""}</span>
-        {!me.linked && (
+        {me && <span className="member-chip"><Avatar name={me.name} /><b>{me.name}</b>{me.linked ? " ✓" : ""}</span>}
+        {me && !me.linked && (
           <>
             <span className="muted">not signed in — anyone can claim you</span>
             <SignInButton onSignedIn={() => { reloadMe(); load(); }} />
           </>
         )}
-        <button className="link" onClick={() => setShowInvite(!showInvite)}>Invite</button>
-        <button className="link" onClick={() => setShowSettings(!showSettings)}>Settings</button>
+        {!readOnly && <button className="link" onClick={() => setShowInvite(!showInvite)}>Invite</button>}
+        {!readOnly && <button className="link" onClick={() => setShowSettings(!showSettings)}>Settings</button>}
       </div>
 
       {showInvite && (
@@ -274,10 +284,10 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
             🎁 <b>Trip Wrapped</b> is on — the trip creator enabled silly awards from this trip's expense data (who pays, owes, drinks, eats).
           </p>
           <div className="row" style={{ marginTop: 8, justifyContent: "flex-end" }}>
-            {me.opted_out_fun
+            {me?.opted_out_fun
               ? <span className="pill">you're hidden from awards</span>
               : <button className="link" onClick={async () => {
-                  await api.patch(`/api/members/${me.id}`, { opted_out_fun: true });
+                  await api.patch(`/api/members/${me?.id}`, { opted_out_fun: true });
                   load();
                 }}>hide me from awards</button>}
             <button className="link" onClick={() => {
@@ -298,9 +308,9 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
         )}
       </div>
       {(tab === "owed" || tab === "youowe") && (() => {
-        const oweYou = data.balances.filter((p) => p.to === me.id);
-        const youOwe = data.balances.filter((p) => p.from === me.id);
-        const others = data.balances.filter((p) => p.from !== me.id && p.to !== me.id);
+        const oweYou = data.balances.filter((p) => p.to === me?.id);
+        const youOwe = data.balances.filter((p) => p.from === me?.id);
+        const others = data.balances.filter((p) => p.from !== me?.id && p.to !== me?.id);
         const markPaid = async (p: { from: string; to: string; amount: number }) => {
           await api.post(`/api/trips/${token}/settlements`, {
             from_member: p.from, to_member: p.to,
@@ -514,7 +524,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
           <input className="money" value={expTotal} placeholder="Total" inputMode="decimal"
             onChange={(e) => setExpTotal(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && createExpense()} />
-          <button className="primary" onClick={createExpense} disabled={!expName.trim() || !expTotal}>Add</button>
+          <button className="primary" onClick={createExpense} disabled={readOnly || !expName.trim() || !expTotal}>Add</button>
         </div>
         <details className="more">
           <summary>Payer &amp; currency</summary>
@@ -522,9 +532,9 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
             <div className="field"><label className="field-label">Currency</label>
               <CurrencyPicker value={expCur ?? t.trip_currency} options={currencies} onChange={setExpCur} /></div>
             <div className="field"><label className="field-label">Paid by</label>
-              <select value={expPayer || me.id} onChange={(e) => setExpPayer(e.target.value)}>
-                <option value={me.id}>{me.name} (you)</option>
-                {data.members.filter((m) => m.id !== me.id).map((m) =>
+              <select value={expPayer || me?.id} onChange={(e) => setExpPayer(e.target.value)}>
+                <option value={me?.id}>{me?.name} (you)</option>
+                {data.members.filter((m) => m.id !== me?.id).map((m) =>
                   <option key={m.id} value={m.id}>{m.name}</option>)}
               </select></div>
           </div>

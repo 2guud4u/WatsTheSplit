@@ -12,6 +12,14 @@ _Avoid_: Group, event
 A named group of Trips that share one "who owes who" view, in a Journey Currency. Reachable from inside any member Trip; a Trip belongs to at most one Journey.
 _Avoid_: Folder, collection
 
+**Journey Link**:
+A shareable link that opens a Journey. Whoever opens it becomes a Journey Viewer: they can read every member Trip and pick a Member name (or add one) in any of them, which upgrades them to full member access for that Trip.
+_Avoid_: Journey invite, share link
+
+**Journey Viewer**:
+A session that opened a Journey Link but hasn't joined any member Trip. Read-only until they claim a Member; claiming grants them edit access to that Trip without its Trip Password.
+_Avoid_: Guest, spectator
+
 **Person**:
 A real human across the Trips in a Journey: Members with the same signed-in account count as one Person, and unlinked Members can be merged into one manually.
 _Avoid_: User, identity

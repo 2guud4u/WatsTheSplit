@@ -19,6 +19,7 @@ type Expense = {
 type Data = {
   expense: Expense;
   trip: { token: string; name: string; settle_currency: string };
+  access: "edit" | "view";
   members: Member[];
   me: string | null;
 };
@@ -106,6 +107,9 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
         <a href={`#/t/${token}`} className="muted">← {t.name}</a>
       </div>
       {e.last_edited_by && <p className="muted">last edited by {e.last_edited_by}</p>}
+      {data.access === "view" && (
+        <div className="card"><p className="muted">View only — add yourself on the journey page to edit.</p></div>
+      )}
       <div className="row" style={{ margin: "4px 0 12px" }}>
         {e.paid_out
           ? <span className="badge badge-done">✓ paid out — shares don't count toward balances</span>

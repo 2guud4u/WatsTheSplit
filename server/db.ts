@@ -189,6 +189,16 @@ CREATE TABLE IF NOT EXISTS journey_merges (
 );
 `)
 
+db.exec(`
+-- journey sharing: a session that opened a journey link can view all member trips
+CREATE TABLE IF NOT EXISTS journey_access (
+  session_token TEXT NOT NULL,
+  journey_token TEXT NOT NULL REFERENCES journeys(token) ON DELETE CASCADE,
+  created_at    TEXT NOT NULL,
+  PRIMARY KEY (session_token, journey_token)
+);
+`)
+
 if (!db.query("SELECT 1 FROM pragma_table_info('expense_participants') WHERE name='paid'").get()) {
   db.exec("ALTER TABLE expense_participants ADD COLUMN paid INTEGER NOT NULL DEFAULT 0");
   // carry over the old whole-expense flag
