@@ -21,7 +21,8 @@ type JourneyData = {
   persons: Person[];
   members: JMember[];
   mergeHints: { name: string; member_ids: string[]; trips: string[] }[];
-  transfers: { from: string; to: string; amount: number }[];
+  transfers: { from: string; to: string; amount: number; from_key: string; to_key: string }[];
+  my_member_ids: string[];
   mergeableTrips: TripRef[];
 };
 
@@ -29,7 +30,7 @@ export default function JourneyView({ token }: { token: string }) {
   const [data, setData] = useState<JourneyData | null>(null);
   const [err, setErr] = useState("");
   const [addOpen, setAddOpen] = useState(false);
-  const [tab, setTab] = useState<"trips" | "owed" | "people">("trips");
+  const [tab, setTab] = useState<"trips" | "owed" | "youowe" | "people">("trips");
 
   const load = useCallback(async () => {
     try { setData(await api.get(`/api/journeys/${token}`)); setErr(""); }
@@ -106,7 +107,8 @@ export default function JourneyView({ token }: { token: string }) {
 
       <div className="tabs">
         <button className={tab === "trips" ? "active" : ""} onClick={() => setTab("trips")}>Trips</button>
-        <button className={tab === "owed" ? "active" : ""} onClick={() => setTab("owed")}>Who owes who</button>
+        <button className={tab === "owed" ? "active" : ""} onClick={() => setTab("owed")}>Who owes you</button>
+        <button className={tab === "youowe" ? "active" : ""} onClick={() => setTab("youowe")}>Who you owe</button>
         <button className={tab === "people" ? "active" : ""} onClick={() => setTab("people")}>People</button>
       </div>
 
@@ -165,17 +167,26 @@ export default function JourneyView({ token }: { token: string }) {
         </>
       )}
 
-      {tab === "owed" && (
-        <div className="card">
-          {data.transfers.length === 0 && <p className="muted">All squared up.</p>}
-          {data.transfers.map((tr, i) => (
-            <div key={i} className="expense-row">
-              <span><b>{tr.from}</b> pays <b>{tr.to}</b></span>
-              <b>{fmtUnits(tr.amount, cur)}</b>
-            </div>
-          ))}
-        </div>
-      )}
+      {(tab === "owed" || tab === "youowe") && (() => {
+        // viewer's person keys: persons containing any of my_member_ids
+        const mine = new Set(data.members.filter((m) => data.my_member_ids.includes(m.id)).map((m) => m.key));
+        const rows = data.transfers.filter((tr) =>
+          mine.size === 0 ? tab === "owed" : tab === "owed" ? mine.has(tr.to_key) : mine.has(tr.from_key));
+        return (
+          <div className="card">
+            {mine.size === 0 && <p className="muted">You haven't joined a trip yet — showing everything.</p>}
+            {rows.length === 0 && mine.size > 0 && (
+              <p className="muted">{tab === "owed" ? "Nobody owes you." : "You owe nobody."}</p>
+            )}
+            {rows.map((tr, i) => (
+              <div key={i} className="expense-row">
+                <span><b>{tr.from}</b> pays <b>{tr.to}</b></span>
+                <b>{fmtUnits(tr.amount, cur)}</b>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
 
       {tab === "people" && (
         <>

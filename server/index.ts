@@ -996,6 +996,11 @@ const routes: Route[] = [
       persons: [...persons.entries()].map(([k, p]) => ({ key: k, ...p })),
       members: allM.map((mm) => ({ id: mm.id, name: mm.name, trip_name: mm.trip_name, key: keyOf(mm), linked: !!mm.user_sub })),
       mergeHints: hints,
+      // member ids belonging to this session, so the client can tell
+      // "who owes you" from "who you owe" inside shared transfers
+      my_member_ids: allM.filter((mm) => (s.user_sub && mm.user_sub === s.user_sub) ||
+        !!db.query("SELECT 1 FROM claims WHERE session_token = ? AND member_id = ?")
+          .get(s.token, mm.id)).map((mm) => mm.id),
       transfers, positions, perTrip,
       mergeableTrips: accessibleTrips(s)
         .filter((t) => !db.query("SELECT 1 FROM journey_trips WHERE trip_token = ?").get(t.token))

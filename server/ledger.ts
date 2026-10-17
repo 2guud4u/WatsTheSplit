@@ -256,13 +256,14 @@ export function journeyBalance(j: Journey) {
   // greedy simplify: largest debtor pays largest creditor
   const debtors = [...net.entries()].filter(([, v]) => v < -1e-6).map(([k, v]) => ({ k, v: -v })).sort((a, b) => b.v - a.v);
   const creditors = [...net.entries()].filter(([, v]) => v > 1e-6).map(([k, v]) => ({ k, v })).sort((a, b) => b.v - a.v);
-  const transfers: { from: string; to: string; amount: number }[] = [];
+  const transfers: { from: string; to: string; amount: number; from_key: string; to_key: string }[] = [];
   let i = 0, jj = 0;
   while (i < debtors.length && jj < creditors.length) {
     const pay = Math.min(debtors[i].v, creditors[jj].v);
     transfers.push({
       from: persons.get(debtors[i].k)?.name ?? "?",
       to: persons.get(creditors[jj].k)?.name ?? "?",
+      from_key: debtors[i].k, to_key: creditors[jj].k,
       amount: Math.round(pay * 10 ** jDec) / 10 ** jDec,
     });
     debtors[i].v -= pay; creditors[jj].v -= pay;
