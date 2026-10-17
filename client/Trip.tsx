@@ -4,6 +4,8 @@ import { api, BASE, Config, toMinor, fmt, fmtUnits, decimals, flag, CATEGORIES }
 import { addRecent } from "./main.tsx";
 import { CurrencyPicker } from "./CurrencyPicker.tsx";
 import { SignInButton } from "./SignIn.tsx";
+import { RangePicker } from "./main.tsx";
+import type { DateRange } from "react-day-picker";
 type Member = { id: string; name: string; linked: boolean; used: boolean; is_me: boolean; opted_out_fun?: boolean };
 type ExpenseSum = {
   id: string; name: string; currency: string; total_minor: number;
@@ -573,15 +575,8 @@ function Settings({ data, token, currencies, reload, setShow }: {
           if (e.target.value !== t.name) { await api.patch(`/api/trips/${token}/settings`, { name: e.target.value }); reload(); }
         }} />
       </div>
-      <div className="row">
-        <div className="field"><label className="field-label">From</label>
-          <input type="date" defaultValue={t.start_date ?? ""} onBlur={async (e) => {
-            await api.patch(`/api/trips/${token}/settings`, { start_date: e.target.value || null }); reload();
-          }} /></div>
-        <div className="field"><label className="field-label">To</label>
-          <input type="date" defaultValue={t.end_date ?? ""} onBlur={async (e) => {
-            await api.patch(`/api/trips/${token}/settings`, { end_date: e.target.value || null }); reload();
-          }} /></div>
+      <div className="field"><label className="field-label">Dates</label>
+        <SettingsDates t={t} token={token} reload={reload} />
       </div>
       <div className="row">
         <div className="field"><label className="field-label">Trip currency</label>
@@ -653,6 +648,25 @@ function Settings({ data, token, currencies, reload, setShow }: {
         </div>
       </div>
       <button onClick={() => setShow(false)}>Close</button>
+    </div>
+  );
+}
+function SettingsDates({ t, token, reload }: { t: { start_date: string | null; end_date: string | null }; token: string; reload: () => void }) {
+  const parse = (s: string | null) => (s ? new Date(s + "T00:00:00") : undefined);
+  const [range, setRange] = useState<DateRange | undefined>({ from: parse(t.start_date), to: parse(t.end_date) });
+  const save = async (r: DateRange | undefined) => {
+    await api.patch(`/api/trips/${token}/settings`, {
+      start_date: r?.from ? r.from.toISOString().slice(0, 10) : null,
+      end_date: r?.to ? r.to.toISOString().slice(0, 10) : null,
+    });
+    reload();
+  };
+  return (
+    <div>
+      <RangePicker value={range} onChange={setRange} onCommit={save} />
+      {(range?.from || range?.to) && (
+        <button className="link" onClick={async () => { setRange(undefined); await save(undefined); }}>Clear dates</button>
+      )}
     </div>
   );
 }

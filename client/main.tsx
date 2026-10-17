@@ -139,7 +139,7 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
 // Drag-to-pick date range: pointer-down on a day sets the start, moving to
 // another day extends the end. Click-click still works via DayPicker's own
 // range mode. Dates are compared at day granularity.
-function RangePicker({ value, onChange }: { value: DateRange | undefined; onChange: (r: DateRange | undefined) => void }) {
+export function RangePicker({ value, onChange, onCommit }: { value: DateRange | undefined; onChange: (r: DateRange | undefined) => void; onCommit?: (r: DateRange | undefined) => void }) {
   const start = React.useRef<Date | null>(null);
   const moved = React.useRef(false);
   const suppress = React.useRef(false); // swallow the click DayPicker fires after pointerup
@@ -171,13 +171,16 @@ function RangePicker({ value, onChange }: { value: DateRange | undefined; onChan
     start.current = null;
     if (!s) return;
     suppress.current = true;
-    if (moved.current) { moved.current = false; return; }
+    if (moved.current) { moved.current = false; onCommit?.(value); return; }
     // Plain click: finish a pending range, else start a new one.
+    let next: DateRange | undefined;
     if (value?.from && !value?.to && s.getTime() !== value.from.getTime()) {
-      onChange(s > value.from ? { from: value.from, to: s } : { from: s, to: value.from });
+      next = s > value.from ? { from: value.from, to: s } : { from: s, to: value.from };
     } else {
-      onChange({ from: s, to: undefined });
+      next = { from: s, to: undefined };
     }
+    onChange(next);
+    onCommit?.(next);
   };
 
   return (
