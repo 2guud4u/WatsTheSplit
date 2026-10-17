@@ -9,17 +9,13 @@ services:
       # Tailnet + LAN only — public traffic arrives via the wts tunnel.
       - "100.127.5.96:8081:8081"
       - "192.168.8.208:8081:8081"
+    env_file: .env            # BASE_URL / GOOGLE_CLIENT_ID / OXR_APP_ID (gitignored)
     environment:
       - PORT=8081
       - DB_PATH=/data/data.db
-      # BASE_URL=https://your.domain   <- set in .env once the tunnel exists
-      # GOOGLE_CLIENT_ID=...           <- optional sign-in
-      # OXR_APP_ID=...                 <- Open Exchange Rates key (empty = Frankfurter daily)
-    env_file:
-      - .env
     volumes:
-      # SQLite data.db lives on the host at /opt/wts/data.db.
-      - /opt/wts/data:/data
+      # SQLite data.db lives on the host at ~/wts/data/data.db.
+      - /home/jia/wts/data:/data
     restart: unless-stopped
     read_only: true
     tmpfs:
