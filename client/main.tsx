@@ -118,12 +118,7 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
             </div>
             <details className="more">
               <summary>Dates (optional){range?.from ? ` — ${range.from.toISOString().slice(0,10)}${range.to ? " → " + range.to.toISOString().slice(0,10) : " → …"}` : ""}</summary>
-              <DayPicker
-                mode="range"
-                selected={range}
-                onSelect={setRange}
-                weekStartsOn={1}
-              />
+              <RangePicker value={range} onChange={setRange} />
             </details>
             {err && <div className="error">{err}</div>}
             <div className="modal-btns">
@@ -131,12 +126,66 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
               <button className="primary" onClick={create}
                 disabled={!name.trim() || !tripCur || !settleCur || !pw.trim()}>Create trip</button>
             </div>
+
           </div>
         </div>
       )}
 
       <RecentTrips me={me} />
     </>
+  );
+}
+
+// Drag-to-pick date range: pointer-down on a day sets the start, moving to
+// another day extends the end. Click-click still works via DayPicker's own
+// range mode. Dates are compared at day granularity.
+function RangePicker({ value, onChange }: { value: DateRange | undefined; onChange: (r: DateRange | undefined) => void }) {
+  const start = React.useRef<Date | null>(null);
+  const moved = React.useRef(false);
+  const suppress = React.useRef(false); // swallow the click DayPicker fires after pointerup
+
+  const dayAt = (e: React.PointerEvent): Date | null => {
+    // During pointer capture e.target stays on the wrapper; hit-test instead.
+    const el = document.elementFromPoint(e.clientX, e.clientY)?.closest?.("[data-day]");
+    const ds = el?.getAttribute("data-day");
+    return ds ? new Date(ds + "T00:00:00") : null;
+  };
+
+  const onDown = (e: React.PointerEvent) => {
+    const d = dayAt(e);
+    if (!d) return;
+    start.current = d;
+    moved.current = false;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  };
+  const onMove = (e: React.PointerEvent) => {
+    const s = start.current;
+    if (!s) return;
+    const d = dayAt(e);
+    if (!d || d.getTime() === s.getTime()) return;
+    moved.current = true;
+    onChange(s <= d ? { from: s, to: d } : { from: d, to: s });
+  };
+  const onUp = (e: React.PointerEvent) => {
+    const s = start.current;
+    start.current = null;
+    if (!s) return;
+    suppress.current = true;
+    if (moved.current) { moved.current = false; return; }
+    // Plain click: finish a pending range, else start a new one.
+    if (value?.from && !value?.to && s.getTime() !== value.from.getTime()) {
+      onChange(s > value.from ? { from: value.from, to: s } : { from: s, to: value.from });
+    } else {
+      onChange({ from: s, to: undefined });
+    }
+  };
+
+  return (
+    <div onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}
+      onPointerCancel={onUp} style={{ touchAction: "pan-y" }}>
+      <DayPicker mode="range" selected={value} weekStartsOn={1}
+        onSelect={(r) => { if (suppress.current) { suppress.current = false; return; } onChange(r); }} />
+    </div>
   );
 }
 
