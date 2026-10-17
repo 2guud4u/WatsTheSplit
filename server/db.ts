@@ -6,10 +6,18 @@ db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
-  google_sub TEXT PRIMARY KEY,
-  email      TEXT NOT NULL,
-  name       TEXT,
-  picture    TEXT
+  -- email is the identity (email-code sign-in); google_sub kept for old rows
+  email      TEXT PRIMARY KEY,
+  google_sub TEXT,
+  name       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS email_codes (
+  email      TEXT PRIMARY KEY,
+  code_hash  TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  attempts   INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -152,4 +160,61 @@ if (!db.query("SELECT 1 FROM pragma_table_info('expenses') WHERE name='created_b
 
 if (!db.query("SELECT 1 FROM pragma_table_info('trips') WHERE name='password_text'").get()) {
   db.exec("ALTER TABLE trips ADD COLUMN password_text TEXT");
+}
+
+// migrate: users table keyed by email instead of google_sub; sessions/members
+// .user_sub carries the email going forward. FK off so DROP TABLE isn't blocked
+// by references; each step drops its staging table first so a crash mid-migration
+// can re-run.
+db.exec("PRAGMA foreign_keys = OFF;");
+try {
+  // old schema has google_sub as PRIMARY KEY (pk>0); new schema has it nullable (pk=0)
+  if (db.query("SELECT 1 FROM pragma_table_info('users') WHERE name='google_sub' AND pk > 0").get()) {
+    db.exec(`
+      DROP TABLE IF EXISTS users_new;
+      CREATE TABLE users_new (
+        email      TEXT PRIMARY KEY,
+        google_sub TEXT,
+        name       TEXT
+      );
+      INSERT INTO users_new (email, google_sub, name)
+        SELECT email, google_sub, name FROM users WHERE email != '';
+      DROP TABLE users;
+      ALTER TABLE users_new RENAME TO users;
+    `);
+  }
+  if (db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='sessions'").get()?.sql.includes("REFERENCES users(google_sub)")) {
+    db.exec(`
+      DROP TABLE IF EXISTS sessions_new;
+      CREATE TABLE sessions_new (
+        token      TEXT PRIMARY KEY,
+        user_sub   TEXT,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO sessions_new SELECT token, user_sub, created_at FROM sessions;
+      DROP TABLE sessions;
+      ALTER TABLE sessions_new RENAME TO sessions;
+    `);
+  }
+  if (db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='members'").get()?.sql.includes("REFERENCES users(google_sub)")) {
+    db.exec(`
+      DROP TABLE IF EXISTS members_new;
+      CREATE TABLE members_new (
+        id         TEXT PRIMARY KEY,
+        trip_token TEXT NOT NULL REFERENCES trips(token) ON DELETE CASCADE,
+        name       TEXT NOT NULL,
+        user_sub   TEXT,
+        opted_out_fun INTEGER NOT NULL DEFAULT 0,
+        detail_views INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        UNIQUE(trip_token, user_sub)
+      );
+      INSERT INTO members_new SELECT id, trip_token, name, user_sub, opted_out_fun, detail_views, created_at FROM members;
+      DROP TABLE members;
+      ALTER TABLE members_new RENAME TO members;
+      CREATE UNIQUE INDEX IF NOT EXISTS members_name_nocase ON members(trip_token, name COLLATE NOCASE);
+    `);
+  }
+} finally {
+  db.exec("PRAGMA foreign_keys = ON;");
 }

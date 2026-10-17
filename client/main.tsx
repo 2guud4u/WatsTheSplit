@@ -5,61 +5,11 @@ import TripView from "./Trip.tsx";
 import ExpenseView from "./Expense.tsx";
 import { CurrencyPicker } from "./CurrencyPicker.tsx";
 import "./styles.css";
+import { SignIn } from "./SignIn.tsx";
 
-declare global {
-  interface Window {
-    google?: {
-      accounts: {
-        id: {
-          initialize: (o: { client_id: string; callback: (r: { credential: string }) => void }) => void;
-          renderButton: (el: HTMLElement, o: { type: string; size: string }) => void;
-        };
-      };
-    };
-  }
-}
-
-type Me = { user: { google_sub: string; email: string; name: string; picture: string } | null };
+type Me = { user: { email: string; name: string | null } | null };
 
 const route = () => location.hash.slice(1).split("?")[0] || "/";
-
-// ---------- Google sign-in ----------
-function useGoogle(config: Config | null, onSignedIn: () => void) {
-  const [ready, setReady] = useState(false);
-  useEffect(() => {
-    if (!config?.googleClientId) return;
-    const init = () => {
-      window.google?.accounts.id.initialize({
-        client_id: config.googleClientId,
-        callback: async (resp: { credential: string }) => {
-          await api.post("/api/auth/google", { credential: resp.credential });
-          onSignedIn();
-        },
-      });
-      setReady(true);
-    };
-    if (window.google) init();
-    else {
-      const s = document.createElement("script");
-      s.src = "https://accounts.google.com/gsi/client";
-      s.onload = init;
-      document.head.appendChild(s);
-    }
-  }, [config?.googleClientId]);
-  return ready;
-}
-
-function GoogleButton({ config, onSignedIn }: { config: Config; onSignedIn: () => void }) {
-  const ref = React.useRef<HTMLDivElement>(null);
-  const ready = useGoogle(config, onSignedIn);
-  useEffect(() => {
-    if (ready && ref.current) {
-      window.google?.accounts.id.renderButton(ref.current, { type: "standard", size: "medium" });
-    }
-  }, [ready]);
-  if (!config.googleClientId) return null;
-  return <div ref={ref} />;
-}
 
 // ---------- recent trips ----------
 const RECENT_KEY = "wts_recent";
@@ -115,13 +65,11 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
               <span>Signed in as <b>{me.user.name || me.user.email}</b></span>
               <button className="link" onClick={async () => { await api.post("/api/auth/signout"); reloadMe(); }}>Sign out</button>
             </>
-          ) : config?.googleClientId ? (
+          ) : (
             <>
               <span className="muted">Sign in to keep your identity across devices</span>
-              <GoogleButton config={config} onSignedIn={reloadMe} />
+              <SignIn compact onSignedIn={reloadMe} />
             </>
-          ) : (
-            <span className="muted">No sign-in configured</span>
           )}
         </div>
       </div>

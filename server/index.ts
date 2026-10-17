@@ -2,9 +2,9 @@ import { db } from "./db.ts";
 import { decimals, isCurrency, CURRENCIES } from "./currencies.ts";
 import { crossRate, startFxLoop, latestProviderTimestamp } from "./fx.ts";
 import { seedDemo, DEMO_TOKEN } from "./demo.ts";
-import { createRemoteJWKSet, jwtVerify } from "jose";
+
 const PORT = Number(process.env.PORT ?? 8081);
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? "";
+
 const BASE_URL = (process.env.BASE_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
 // Serve under a path prefix when set (e.g. BASE_PATH=/watsthesplit on jiathe.dev).
 // The tunnel forwards unprefixed-path URLs, so we strip it before routing.
@@ -439,13 +439,34 @@ function lockRate(eId: string, currency: string, settle: string): void {
   );
 }
 
-async function verifyGoogle(credential: string) {
-  const JWKS = createRemoteJWKSet(new URL("https://www.googleapis.com/oauth2/v3/certs"));
-  const { payload } = await jwtVerify(credential, JWKS, {
-    issuer: ["https://accounts.google.com", "accounts.google.com"],
-    audience: GOOGLE_CLIENT_ID,
+// ---------- email-code sign-in ----------
+// 4-char code from an unambiguous alphabet, emailed to the user. Codes are
+// stored hashed, expire after 10 minutes, allow 5 verify attempts, and are
+// single-use. Rate-limited to 3 sends per email per hour.
+const CODE_ALPHA = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const CODE_TTL_MS = 10 * 60 * 1000;
+const CODE_MAX_ATTEMPTS = 5;
+const sendLog = new Map<string, number[]>(); // email -> send timestamps (in-memory)
+
+function newCode(): string {
+  const b = crypto.getRandomValues(new Uint8Array(4));
+  return [...b].map((x) => CODE_ALPHA[x % CODE_ALPHA.length]).join("");
+}
+
+async function sendCodeEmail(email: string, code: string): Promise<void> {
+  const subject = `Your WatsTheSplit code: ${code}`;
+  const text = `Your sign-in code is ${code} (valid 10 minutes).\n\nOpen WatsTheSplit: ${BASE_URL}/\n`;
+  const key = process.env.RESEND_API_KEY ?? "";
+  if (!key) { console.log(`[email:dev] to ${email}: ${code}`); return; }
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      from: process.env.EMAIL_FROM ?? "WatsTheSplit <onboarding@resend.dev>",
+      to: [email], subject, text,
+    }),
   });
-  return payload as { sub: string; email?: string; name?: string; picture?: string };
+  if (!res.ok) throw new Error(`resend_${res.status}`);
 }
 
 type Ctx = { session: Session; trip: Trip; member: Member | null };
@@ -469,29 +490,52 @@ type Route = [RegExp, string, (req: Request, m: RegExpMatchArray, body: Body) =>
 
 const routes: Route[] = [
   [/^\/api\/config$/, "GET", async () =>
-    json({ googleClientId: GOOGLE_CLIENT_ID, baseUrl: BASE_URL, currencies: CURRENCIES })],
+    json({ baseUrl: BASE_URL, currencies: CURRENCIES })],
 
   [/^\/api\/me$/, "GET", async (req) => {
     const s = sessionFrom(req);
     if (!s) return json({ user: null });
     const user = s.user_sub
-      ? db.query("SELECT google_sub, email, name, picture FROM users WHERE google_sub = ?").get(s.user_sub)
+      ? db.query("SELECT email, name FROM users WHERE email = ?").get(s.user_sub)
       : null;
     return json({ user });
   }],
 
-  [/^\/api\/auth\/google$/, "POST", async (req, _m, body) => {
-    if (!GOOGLE_CLIENT_ID) return err(503, "google_not_configured");
-    let payload;
-    try { payload = await verifyGoogle(String(body.credential ?? "")); }
-    catch { return err(401, "invalid_token"); }
+  [/^\/api\/auth\/email$/, "POST", async (_req, _m, body) => {
+    const email = String(body.email ?? "").trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err(400, "bad_email");
+    // 3 sends per email per hour
+    const nowMs = Date.now();
+    const sends = (sendLog.get(email) ?? []).filter((t) => nowMs - t < 3600e3);
+    if (sends.length >= 3) return err(429, "too_many_codes");
+    sends.push(nowMs); sendLog.set(email, sends);
+    const code = newCode();
+    try { await sendCodeEmail(email, code); }
+    catch { return err(502, "send_failed"); }
     db.run(
-      `INSERT INTO users (google_sub, email, name, picture) VALUES (?,?,?,?)
-       ON CONFLICT(google_sub) DO UPDATE SET email=excluded.email, name=excluded.name, picture=excluded.picture`,
-      [payload.sub, payload.email ?? "", payload.name ?? "", payload.picture ?? ""],
+      "INSERT OR REPLACE INTO email_codes (email, code_hash, expires_at, attempts, created_at) VALUES (?,?,?,0,?)",
+      [email, await Bun.password.hash(code), new Date(nowMs + CODE_TTL_MS).toISOString(), now()],
     );
+    return json({ ok: true });
+  }],
+
+  [/^\/api\/auth\/email\/verify$/, "POST", async (req, _m, body) => {
+    const email = String(body.email ?? "").trim().toLowerCase();
+    const row = db.query<{ code_hash: string; expires_at: string; attempts: number }, [string]>(
+      "SELECT code_hash, expires_at, attempts FROM email_codes WHERE email = ?",
+    ).get(email);
+    if (!row) return err(400, "no_code");
+    if (Date.parse(row.expires_at) < Date.now()) return err(400, "code_expired");
+    if (row.attempts >= CODE_MAX_ATTEMPTS) return err(429, "too_many_attempts");
+    const ok = await Bun.password.verify(String(body.code ?? "").trim().toUpperCase(), row.code_hash);
+    if (!ok) {
+      db.run("UPDATE email_codes SET attempts = attempts + 1 WHERE email = ?", [email]);
+      return err(403, "wrong_code");
+    }
+    db.run("DELETE FROM email_codes WHERE email = ?", [email]);
+    db.run("INSERT INTO users (email) VALUES (?) ON CONFLICT(email) DO NOTHING", [email]);
     const { session, headers } = ensureSession(req);
-    db.run("UPDATE sessions SET user_sub = ? WHERE token = ?", [payload.sub, session.token]);
+    db.run("UPDATE sessions SET user_sub = ? WHERE token = ?", [email, session.token]);
     return json({ ok: true }, { headers });
   }],
 

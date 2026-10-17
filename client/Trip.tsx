@@ -3,6 +3,7 @@ import qrcode from "qrcode-generator";
 import { api, BASE, Config, toMinor, fmt, fmtUnits, decimals, flag, CATEGORIES } from "./api.ts";
 import { addRecent } from "./main.tsx";
 import { CurrencyPicker } from "./CurrencyPicker.tsx";
+import { SignIn } from "./SignIn.tsx";
 type Member = { id: string; name: string; linked: boolean; used: boolean; is_me: boolean; opted_out_fun?: boolean };
 type ExpenseSum = {
   id: string; name: string; currency: string; total_minor: number;
@@ -74,7 +75,7 @@ function MoneyInput({ code, value, onCommit, placeholder }: {
 }
 
 export default function TripView({ token, config, me: meInfo, reloadMe }: {
-  token: string; config: Config | null; me: { user: { google_sub: string; name: string } | null };
+  token: string; config: Config | null; me: { user: { email: string; name: string | null } | null };
   reloadMe: () => void;
 }) {
   const [data, setData] = useState<TripData | null>(null);
@@ -189,9 +190,9 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
               setNewName(""); load();
             }}>Join as new</button>
           </div>
-          {!data.signed_in && config?.googleClientId && (
-            <div id="googbtn" style={{ marginTop: 14 }}>
-              <GoogleSignIn config={config} onSignedIn={() => { reloadMe(); load(); }} />
+          {!data.signed_in && (
+            <div style={{ marginTop: 14 }}>
+              <SignIn compact onSignedIn={() => { reloadMe(); load(); }} />
             </div>
           )}
         </div>
@@ -540,29 +541,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
   );
 }
 
-function GoogleSignIn({ config, onSignedIn }: { config: Config; onSignedIn: () => void }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const init = () => {
-      window.google?.accounts.id.initialize({
-        client_id: config.googleClientId,
-        callback: async (resp: { credential: string }) => {
-          await api.post("/api/auth/google", { credential: resp.credential });
-          onSignedIn();
-        },
-      });
-      if (ref.current) window.google?.accounts.id.renderButton(ref.current, { type: "standard", size: "medium" });
-    };
-    if (window.google) init();
-    else {
-      const s = document.createElement("script");
-      s.src = "https://accounts.google.com/gsi/client";
-      s.onload = init;
-      document.head.appendChild(s);
-    }
-  }, [config.googleClientId]);
-  return <div ref={ref} />;
-}
+
 
 function Settings({ data, token, currencies, reload, setShow }: {
   data: TripData; token: string; currencies: string[];

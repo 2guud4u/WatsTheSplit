@@ -1,4 +1,4 @@
-export type Config = { googleClientId: string; baseUrl: string; currencies: string[] };
+export type Config = { baseUrl: string; currencies: string[] };
 
 // Deployed under BASE_PATH (e.g. /watsthesplit) — vite base bakes it into
 // import.meta.env.BASE_URL; strip its trailing slash for path joins.

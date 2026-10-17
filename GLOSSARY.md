@@ -21,7 +21,7 @@ A Member someone has picked as "me" on a device without signing in; anyone else 
 _Avoid_: Guest, anonymous user
 
 **Linked Member**:
-A Member tied to a Google account; only that account can act as them.
+A Member tied to a signed-in account (email-code sign-in); only that account can act as them.
 _Avoid_: Registered user, verified member
 
 **Trip Link**:
@@ -29,7 +29,7 @@ A shareable link (also shown as a QR code) that opens a Trip; it is the only thi
 _Avoid_: Invite link, join code, invitation
 
 **Trip Password**:
-An optional password on a Trip that anyone opening the Trip Link must enter once per device; Linked Members don't need it.
+A required password on a Trip; anyone opening the Trip Link must enter it once per device (the share link carries it as ?pw= for seamless join). Linked Members don't need it.
 _Avoid_: PIN, passcode
 
 ## Money

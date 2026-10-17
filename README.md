@@ -1,6 +1,6 @@
 # WatsTheSplit
 
-Split trip expenses with friends. No sign-in required to join — a shareable link (or QR) gets everyone in; Google sign-in is optional and locks your name to your account. Each expense locks the exchange rate at the moment it is created (hourly snapshot from Open Exchange Rates).
+Split trip expenses with friends. No sign-in required to join — a shareable link (or QR) gets everyone in; email sign-in (4-letter code, no password) is optional and locks your name to your account. Each expense locks the exchange rate at the moment it is created (daily snapshot; hourly if OXR_APP_ID is set).
 
 ## Run locally
 
@@ -22,24 +22,25 @@ bun run dev:client   # terminal 2 → http://localhost:5173
 | Var | Purpose |
 |---|---|
 | `OXR_APP_ID` | Open Exchange Rates App ID (free tier: hourly, USD base, 1,000 req/mo). Without it, rates stay `unavailable` and expenses still work. |
-| `GOOGLE_CLIENT_ID` | OAuth client ID for optional Google sign-in. Without it, the sign-in button is hidden. |
+| `RESEND_API_KEY` | Resend API key for sign-in emails. Without it, codes are printed to the server log (dev mode) — sign-in still works locally. |
+| `EMAIL_FROM` | Sender for sign-in emails (default `WatsTheSplit <onboarding@resend.dev>`; use a verified domain in production). |
 | `BASE_URL` | Public origin used in invite links (default `http://localhost:PORT`). |
 | `PORT` | Listen port (default 3000). |
 | `DB_PATH` | SQLite file (default `data.db`). |
 
 ## Deploying on your server
 
-1. Point a domain you own at a Cloudflare Tunnel targeting `http://localhost:3000`.
-2. In Google Cloud Console: create an OAuth client (Web), add your tunnel domain as an authorized JavaScript origin and `https://<domain>` as a redirect origin, then set `GOOGLE_CLIENT_ID`.
+1. Point a domain you own at a Cloudflare Tunnel targeting `http://localhost:8081`.
+2. Sign up at resend.com; add your domain via Cloudflare Domain Connect (it writes MX/SPF/DKIM for you), get an API key, set `RESEND_API_KEY` and `EMAIL_FROM`.
 3. Set `BASE_URL=https://<domain>`.
 4. Backup = copy `data.db`.
 
-Google consent screen: apps under 100 users or in testing mode skip verification; users see an "unverified app" notice. See `docs/research/fx-rates-and-google-auth.md`.
+Email deliverability notes: `docs/research/email-sign-in.md`.
 
 ## How it works
 
 - **Trip** — name, date range, trip currency (default for new expenses), settlement currency (locked once the first expense exists).
-- **Members** — placeholders anyone can claim, claimed members (device-only, anyone can re-pick), linked members (Google account).
+- **Members** — placeholders anyone can claim, claimed members (device-only, anyone can re-pick), linked members (signed-in email account).
 - **Expense** — one payer, participants, total. Everyone in the trip is a participant by default; a participant with no typed share takes an equal share of whatever is left after fixed shares and items. Typing an amount fixes it. Items split equally among their sharers; "split rest equally" and "spread proportionally" distribute any leftover. If every participant has a fixed share and they don't add up, the gap/over shows as a badge.
 - **Locked rate** — stored per expense at creation (rate, provider timestamp); re-fetched only if the currency changes.
 - **Balances** — pairwise nets in settlement currency; settlements recorded in settlement currency.
