@@ -1,7 +1,8 @@
 import { db } from "./db.ts";
 
 const OXR_APP_ID = process.env.OXR_APP_ID ?? "";
-const FETCH_MS = 60 * 60 * 1000; // hourly
+const FETCH_MS = 24 * 60 * 60 * 1000; // daily — Frankfurter rates are daily anyway;
+// with OXR the locked-rate snapshot just gets up to a day stale.
 
 // Fetch USD->all from Open Exchange Rates and store in fx_latest.
 // Without an App ID (or when OXR fails) we fall back to Frankfurter
