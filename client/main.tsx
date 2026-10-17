@@ -5,6 +5,8 @@ import TripView from "./Trip.tsx";
 import ExpenseView from "./Expense.tsx";
 import { CurrencyPicker } from "./CurrencyPicker.tsx";
 import "./styles.css";
+import { DayPicker, type DateRange } from "react-day-picker";
+import "react-day-picker/style.css";
 import { SignInButton } from "./SignIn.tsx";
 
 type Me = { user: { email: string; name: string | null } | null };
@@ -25,8 +27,7 @@ export const addRecent = (token: string, name: string) => {
 // ---------- Home ----------
 function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadMe: () => void }) {
   const [name, setName] = useState("");
-  const [start, setStart] = useState("");
-  const [end, setEnd] = useState("");
+  const [range, setRange] = useState<DateRange | undefined>();
   const [tripCur, setTripCur] = useState("");
   const [settleCur, setSettleCur] = useState("");
   const [members, setMembers] = useState<string[]>([]);
@@ -39,7 +40,9 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
   const create = async () => {
     try {
       const r = await api.post("/api/trips", {
-        name, start_date: start || null, end_date: end || null,
+        name,
+        start_date: range?.from ? range.from.toISOString().slice(0, 10) : null,
+        end_date: range?.to ? range.to.toISOString().slice(0, 10) : null,
         trip_currency: tripCur, settle_currency: settleCur,
         password: pw, members,
       });
@@ -114,11 +117,13 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
               </div>
             </div>
             <details className="more">
-              <summary>Dates (optional)</summary>
-              <div className="row">
-                <div className="field"><label className="field-label">From</label><input type="date" value={start} onChange={(e) => setStart(e.target.value)} /></div>
-                <div className="field"><label className="field-label">To</label><input type="date" value={end} onChange={(e) => setEnd(e.target.value)} /></div>
-              </div>
+              <summary>Dates (optional){range?.from ? ` — ${range.from.toISOString().slice(0,10)}${range.to ? " → " + range.to.toISOString().slice(0,10) : " → …"}` : ""}</summary>
+              <DayPicker
+                mode="range"
+                selected={range}
+                onSelect={setRange}
+                weekStartsOn={1}
+              />
             </details>
             {err && <div className="error">{err}</div>}
             <div className="modal-btns">
