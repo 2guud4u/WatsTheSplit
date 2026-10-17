@@ -137,6 +137,11 @@ input, select, button {
   border-radius: 10px; background: var(--surface);
   transition: border-color .15s, box-shadow .15s, background .15s;
 }
+
+/* iOS auto-zooms on focus when inputs are under 16px — keep touch controls at 16px. */
+@media (pointer: coarse) {
+  input, select, textarea, button { font-size: 16px; }
+}
 .locked-field {
   padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;
   background: var(--chip); color: var(--muted);
