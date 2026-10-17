@@ -274,7 +274,9 @@ export function RangePicker({ value, onChange, onCommit }: { value: DateRange | 
 
 function RecentTrips({ me }: { me: Me }) {
   const [myTrips, setMyTrips] = useState<{ token: string; name: string }[]>([]);
+  const [myJourneys, setMyJourneys] = useState<{ token: string; name: string }[]>([]);
   useEffect(() => {
+    api.get("/api/my-journeys").then((r) => setMyJourneys(r.journeys)).catch(() => {});
     if (me.user) api.get("/api/my-trips").then((r) => setMyTrips(r.trips));
   }, [me.user]);
   const recent = getRecent();
@@ -287,6 +289,18 @@ function RecentTrips({ me }: { me: Me }) {
             {myTrips.map((t) => (
               <div key={t.token} className="expense-row">
                 <a href={`#/t/${t.token}`}>{t.name}</a>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {myJourneys.length > 0 && (
+        <>
+          <h2>My journeys</h2>
+          <div className="card">
+            {myJourneys.map((j) => (
+              <div key={j.token} className="expense-row">
+                <a href={`#/j/${j.token}`}>{j.name}</a>
               </div>
             ))}
           </div>

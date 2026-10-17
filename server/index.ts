@@ -1008,6 +1008,26 @@ const routes: Route[] = [
     });
   }],
 
+  // journeys this session can open: via a journey-link grant or a member trip
+  [/^\/api\/my-journeys$/, "GET", async (req) => {
+    const s = sessionFrom(req);
+    if (!s) return json({ journeys: [] });
+    const granted = db.query<{ journey_token: string }, [string]>(
+      "SELECT journey_token FROM journey_access WHERE session_token = ?",
+    ).all(s.token).map((r) => r.journey_token);
+    const viaTrips = db.query<{ journey_token: string }, [string, string | null]>(
+      `SELECT DISTINCT jt.journey_token FROM journey_trips jt
+       WHERE jt.trip_token IN (
+         SELECT trip_token FROM consents WHERE session_token = ?
+         UNION SELECT trip_token FROM members WHERE user_sub = ?)`,
+    ).all(s.token, s.user_sub).map((r) => r.journey_token);
+    const journeys = [...new Set([...granted, ...viaTrips])]
+      .map((t) => qJourney.get(t))
+      .filter((j): j is Journey => !!j)
+      .map((j) => ({ token: j.token, name: j.name, settle_currency: j.settle_currency }));
+    return json({ journeys });
+  }],
+
   // journey link: opening it (POST join) grants read access to every member trip
   [/^\/api\/journeys\/([A-Za-z0-9]+)\/join$/, "POST", async (req, m) => {
     const { session: s, headers } = ensureSession(req);
