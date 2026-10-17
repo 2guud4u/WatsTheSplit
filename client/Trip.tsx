@@ -9,7 +9,7 @@ import type { DateRange } from "react-day-picker";
 type Member = { id: string; name: string; linked: boolean; used: boolean; is_me: boolean; opted_out_fun?: boolean };
 type ExpenseSum = {
   id: string; name: string; currency: string; total_minor: number;
-  payer_member_id: string | null; category: string | null; unassigned_minor: number; over: boolean;
+  payer_member_id: string | null; category: string | null; unassigned_minor: number; over: boolean; paid_out?: boolean;
   rate: number | null;
 };
 type Settlement = { id: string; from_member: string; to_member: string; amount_minor: number };
@@ -543,6 +543,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
                 : <span className="badge badge-unassigned">{fmt(e.unassigned_minor, e.currency)} unassigned</span>}
               {e.rate === null && e.currency !== t.settle_currency &&
                 <span className="badge badge-unassigned" title="Not counted in balances">no rate</span>}
+              {e.paid_out && <span className="badge badge-done">✓ paid</span>}
             </span>
           </div>
         ))}

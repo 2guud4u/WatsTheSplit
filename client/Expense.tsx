@@ -9,7 +9,7 @@ type Expense = {
   payer_member_id: string | null; category: string | null;
   rate: number | null; rate_provider: string | null; rate_timestamp: string | null;
   recorded_at: string; last_edited_by: string | null; last_edited_at: string;
-  assigned_minor: number; unassigned_minor: number; over: boolean;
+  assigned_minor: number; unassigned_minor: number; over: boolean; paid_out?: boolean;
   participants?: { member_id: string; share_minor: number | null; name: string }[];
   items?: Item[];
   effective_shares?: { member_id: string; minor: number | null }[];
@@ -109,6 +109,17 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
         <a href={`#/t/${token}`} className="muted">← {t.name}</a>
       </div>
       {e.last_edited_by && <p className="muted">last edited by {e.last_edited_by}</p>}
+      <div className="row" style={{ margin: "4px 0 12px" }}>
+        {e.paid_out
+          ? <span className="badge badge-done">✓ paid out — shares don't count toward balances</span>
+          : null}
+        {data.me && data.me === e.payer_member_id && (
+          <button className="link" onClick={async () => {
+            try { await patch({ paid_out: !e.paid_out }); }
+            catch { /* payer_only shouldn't happen — button is gated */ }
+          }}>{e.paid_out ? "Unmark" : "Mark all paid"}</button>
+        )}
+      </div>
 
       <div className="card">
         <div className="row">

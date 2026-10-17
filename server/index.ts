@@ -118,6 +118,7 @@ type ExpenseRow = {
   rate: number | null; rate_provider: string | null; rate_timestamp: string | null;
   recorded_at: string; last_edited_by: string | null; last_edited_at: string;
   created_by_member_id?: string | null;
+  paid_out: number;
 };
 
 // Per-participant effective share in expense minor units.
@@ -173,6 +174,7 @@ function expensePayload(e: ExpenseRow, detail: boolean) {
     rate: e.rate, rate_provider: e.rate_provider, rate_timestamp: e.rate_timestamp,
     last_edited_by: e.last_edited_by, last_edited_at: e.last_edited_at,
     assigned_minor: assigned, unassigned_minor: unassigned, over: unassigned < 0,
+    paid_out: !!e.paid_out,
   };
   if (!detail) return base;
   base.participants = db.query<{ member_id: string; share_minor: number | null; name: string }, [string]>(
@@ -374,6 +376,7 @@ function balancesForTrip(t: Trip) {
     "SELECT * FROM expenses WHERE trip_token = ?",
   ).all(t.token)) {
     if (!e.payer_member_id) continue;
+    if (e.paid_out) continue; // payer marked it reimbursed — shares count for nothing
     const rate = e.currency === t.settle_currency ? 1 : e.rate;
     if (rate === null) continue;
     for (const s of effectiveShares(e)) {
@@ -874,6 +877,11 @@ const routes: Route[] = [
     if (body.category !== undefined) {
       const c = body.category === null || body.category === "" ? null : String(body.category).trim();
       db.run("UPDATE expenses SET category = ? WHERE id = ?", [c, e.id]);
+    }
+    if (body.paid_out !== undefined) {
+      // only the member acting as the payer can mark an expense all-paid
+      if (me?.id !== e.payer_member_id) return err(403, "payer_only");
+      db.run("UPDATE expenses SET paid_out = ? WHERE id = ?", [body.paid_out ? 1 : 0, e.id]);
     }
     if (body.currency !== undefined) {
       const c = String(body.currency).toUpperCase();

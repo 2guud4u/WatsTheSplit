@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS expenses (
   recorded_at     TEXT NOT NULL,
   last_edited_by  TEXT,
   last_edited_at  TEXT NOT NULL,
-  created_at      TEXT NOT NULL
+  created_at      TEXT NOT NULL,
+  paid_out        INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS expense_participants (
@@ -160,6 +161,10 @@ if (!db.query("SELECT 1 FROM pragma_table_info('expenses') WHERE name='created_b
 
 if (!db.query("SELECT 1 FROM pragma_table_info('trips') WHERE name='password_text'").get()) {
   db.exec("ALTER TABLE trips ADD COLUMN password_text TEXT");
+}
+
+if (!db.query("SELECT 1 FROM pragma_table_info('expenses') WHERE name='paid_out'").get()) {
+  db.exec("ALTER TABLE expenses ADD COLUMN paid_out INTEGER NOT NULL DEFAULT 0");
 }
 
 // migrate: users table keyed by email instead of google_sub; sessions/members
