@@ -80,6 +80,7 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
   const [tripCur, setTripCur] = useState("");
   const [settleCur, setSettleCur] = useState("");
   const [membersText, setMembersText] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
   const currencies = config?.currencies ?? [];
@@ -117,40 +118,45 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
         </div>
       </div>
 
-      <h2>Create a trip</h2>
-      <div className="card">
-        <div className="row">
-          <input className="wide" value={name} onChange={(e) => setName(e.target.value)}
-            placeholder="Trip name — e.g. Japan 2026"
-            onKeyDown={(e) => e.key === "Enter" && create()} />
-        </div>
-        <div className="row">
-          <input className="wide" type="text" value={pw} onChange={(e) => setPw(e.target.value)}
-            placeholder="Trip password — anyone with the link still needs it"
-            onKeyDown={(e) => e.key === "Enter" && create()} />
-          <button className="primary" onClick={create}
-            disabled={!name.trim() || !tripCur || !settleCur || !pw.trim()}>Create trip</button>
-        </div>
-        <div className="row">
-          <div className="field"><label className="field-label">Trip currency</label>
-            <CurrencyPicker value={tripCur} options={currencies} onChange={setTripCur} /></div>
-          <div className="field"><label className="field-label">Settlement currency</label>
-            <CurrencyPicker value={settleCur} options={currencies} onChange={setSettleCur} /></div>
-        </div>
-        <div className="field" style={{ marginTop: 4 }}>
-          <label className="field-label">Members (optional)</label>
-          <input className="wide" value={membersText} placeholder="e.g. Alice, Bob, Carol — they pick their name when they join"
-            onChange={(e) => setMembersText(e.target.value)} />
-        </div>
-        <details className="more">
-          <summary>Dates (optional)</summary>
-          <div className="row">
-            <div className="field"><label className="field-label">From</label><input type="date" value={start} onChange={(e) => setStart(e.target.value)} /></div>
-            <div className="field"><label className="field-label">To</label><input type="date" value={end} onChange={(e) => setEnd(e.target.value)} /></div>
+      <button className="primary" onClick={() => setShowCreate(true)}>Create a trip</button>
+
+      {showCreate && (
+        <div className="modal-bg" onClick={() => setShowCreate(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Create a trip</h3>
+            <div className="field"><label className="field-label">Name</label>
+              <input className="wide" autoFocus value={name} onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. Japan 2026" onKeyDown={(e) => e.key === "Enter" && create()} /></div>
+            <div className="field"><label className="field-label">Password (required)</label>
+              <input className="wide" type="text" value={pw} onChange={(e) => setPw(e.target.value)}
+                placeholder="Friends need it — the share link carries it"
+                onKeyDown={(e) => e.key === "Enter" && create()} /></div>
+            <div className="row">
+              <div className="field"><label className="field-label">Trip currency</label>
+                <CurrencyPicker value={tripCur} options={currencies} onChange={setTripCur} /></div>
+              <div className="field"><label className="field-label">Settlement currency</label>
+                <CurrencyPicker value={settleCur} options={currencies} onChange={setSettleCur} /></div>
+            </div>
+            <div className="field"><label className="field-label">Members (optional)</label>
+              <input className="wide" value={membersText}
+                placeholder="Alice, Bob, Carol — they pick their name when they join"
+                onChange={(e) => setMembersText(e.target.value)} /></div>
+            <details className="more">
+              <summary>Dates (optional)</summary>
+              <div className="row">
+                <div className="field"><label className="field-label">From</label><input type="date" value={start} onChange={(e) => setStart(e.target.value)} /></div>
+                <div className="field"><label className="field-label">To</label><input type="date" value={end} onChange={(e) => setEnd(e.target.value)} /></div>
+              </div>
+            </details>
+            {err && <div className="error">{err}</div>}
+            <div className="modal-btns">
+              <button className="link" onClick={() => setShowCreate(false)}>Cancel</button>
+              <button className="primary" onClick={create}
+                disabled={!name.trim() || !tripCur || !settleCur || !pw.trim()}>Create trip</button>
+            </div>
           </div>
-        </details>
-        {err && <div className="error">{err}</div>}
-      </div>
+        </div>
+      )}
 
       <RecentTrips me={me} />
     </>
