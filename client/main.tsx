@@ -39,9 +39,10 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showJourney, setShowJourney] = useState(false);
   const [jName, setJName] = useState("");
-  const [jCur, setJCur] = useState("");
   const [jPicked, setJPicked] = useState<Set<string>>(new Set());
-  const [jTrips, setJTrips] = useState<{ token: string; name: string; journey: { token: string; name: string } | null }[]>([]);
+  const [jTrips, setJTrips] = useState<{ token: string; name: string; settle_currency: string; journey: { token: string; name: string } | null }[]>([]);
+  // a journey takes the currency of its first picked trip; others must match
+  const jCur = jTrips.find((t) => jPicked.has(t.token))?.settle_currency ?? "";
 
   const openJourneyModal = async () => {
     setShowJourney(true);
@@ -51,7 +52,7 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
   const createJourney = async () => {
     try {
       const r = await api.post("/api/journeys", {
-        name: jName, settle_currency: jCur, trip_tokens: [...jPicked],
+        name: jName, trip_tokens: [...jPicked],
       });
       location.hash = `#/j/${r.token}`;
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
@@ -111,25 +112,27 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
         <div className="modal-bg" onClick={() => setShowJourney(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3>Create a journey</h3>
-            <p className="muted">A journey shares one "who owes who" balance across trips.</p>
+            <p className="muted">A journey shares one "who owes who" balance across trips that settle in the same currency.</p>
             <div className="field"><label className="field-label">Name</label>
               <input className="wide" autoFocus value={jName} onChange={(e) => setJName(e.target.value)}
                 placeholder="e.g. Asia 2026" /></div>
-            <div className="field"><label className="field-label">Shared balance currency</label>
-              <CurrencyPicker value={jCur} options={currencies} onChange={setJCur} /></div>
             <div className="field"><label className="field-label">Trips to include — tap to select</label>
               {jTrips.length === 0
                 ? <p className="muted">No trips available — create trips first, or open them on this device.</p>
                 : (
                   <div className="pills" style={{ flexDirection: "column", alignItems: "stretch" }}>
-                    {jTrips.map((t) => (
-                      <button key={t.token}
-                        className={`member-pill${jPicked.has(t.token) ? " picked" : ""}`}
-                        style={{ textAlign: "left", padding: "10px 14px", cursor: "pointer" }}
-                        onClick={() => setJPicked((s) => { const n = new Set(s); n.has(t.token) ? n.delete(t.token) : n.add(t.token); return n; })}>
-                        {jPicked.has(t.token) ? "✓ " : ""}{t.name}
-                      </button>
-                    ))}
+                    {jTrips.map((t) => {
+                      const blocked = !!jCur && t.settle_currency !== jCur;
+                      return (
+                        <button key={t.token} disabled={blocked}
+                          className={`member-pill${jPicked.has(t.token) ? " picked" : ""}`}
+                          style={{ textAlign: "left", padding: "10px 14px", cursor: blocked ? "not-allowed" : "pointer" }}
+                          onClick={() => setJPicked((s) => { const n = new Set(s); n.has(t.token) ? n.delete(t.token) : n.add(t.token); return n; })}>
+                          {jPicked.has(t.token) ? "✓ " : ""}{t.name}
+                          <span className="muted"> · {t.settle_currency}{blocked ? ` — journey is ${jCur}` : ""}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
             </div>
@@ -137,7 +140,7 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
             <div className="modal-btns">
               <button className="link" onClick={() => setShowJourney(false)}>Cancel</button>
               <button className="primary" onClick={createJourney}
-                disabled={!jName.trim() || !jCur || jPicked.size === 0}>Create journey</button>
+                disabled={!jName.trim() || jPicked.size === 0}>Create journey</button>
             </div>
           </div>
         </div>

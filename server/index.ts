@@ -915,7 +915,7 @@ const routes: Route[] = [
     return json({
       trips: accessibleTrips(s).map((t) => {
         const j = jOf.get(t.token);
-        return { token: t.token, name: t.name, journey: j ? { token: j.journey_token, name: j.name } : null };
+        return { token: t.token, name: t.name, settle_currency: t.settle_currency, journey: j ? { token: j.journey_token, name: j.name } : null };
       }),
     });
   }],
@@ -945,12 +945,14 @@ const routes: Route[] = [
     const { session: s, headers } = ensureSession(req);
     const name = String(body.name ?? "").trim();
     if (!name) return err(400, "name_required");
-    const sc = String(body.settle_currency ?? "").toUpperCase();
-    if (!isCurrency(sc)) return err(400, "bad_currency");
     const wanted = Array.isArray(body.trip_tokens) ? body.trip_tokens.map(String) : [];
-    const allowed = new Set(accessibleTrips(s).map((t) => t.token));
-    const tokens = [...new Set(wanted)].filter((t) => allowed.has(t));
-    if (!tokens.length) return err(400, "no_trips");
+    const allowed = new Map(accessibleTrips(s).map((t) => [t.token, t]));
+    const picked = [...new Set(wanted)].map((t) => allowed.get(t)).filter((t): t is Trip => !!t);
+    if (!picked.length) return err(400, "no_trips");
+    // A Journey has no currency of its own: every trip must settle in the same one.
+    const sc = picked[0].settle_currency;
+    if (picked.some((t) => t.settle_currency !== sc)) return err(400, "settle_currency_mismatch");
+    const tokens = picked.map((t) => t.token);
     const token = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
     db.run("INSERT INTO journeys (token, name, settle_currency, created_at) VALUES (?,?,?,?)",
       [token, name, sc, now()]);
@@ -981,7 +983,7 @@ const routes: Route[] = [
       if (keys.size > 1)
         hints.push({ name: ms[0].name, member_ids: ms.map((mm) => mm.id), trips: [...new Set(ms.map((mm) => mm.trip_name!))] });
     }
-    const { transfers, positions, perTrip } = journeyBalance(j);
+    const { transfers } = journeyBalance(j);
     return json({
       journey: { token: j.token, name: j.name, settle_currency: j.settle_currency },
       trips: trips.map((t) => ({
@@ -1001,10 +1003,11 @@ const routes: Route[] = [
       my_member_ids: allM.filter((mm) => (s.user_sub && mm.user_sub === s.user_sub) ||
         !!db.query("SELECT 1 FROM claims WHERE session_token = ? AND member_id = ?")
           .get(s.token, mm.id)).map((mm) => mm.id),
-      transfers, positions, perTrip,
+      transfers,
+      // trips this session could add; mismatched currencies listed but blocked
       mergeableTrips: accessibleTrips(s)
         .filter((t) => !db.query("SELECT 1 FROM journey_trips WHERE trip_token = ?").get(t.token))
-        .map((t) => ({ token: t.token, name: t.name })),
+        .map((t) => ({ token: t.token, name: t.name, settle_currency: t.settle_currency })),
     });
   }],
 
@@ -1049,6 +1052,7 @@ const routes: Route[] = [
     if (!hasAccess(s, t)) return err(403, "no_trip_access");
     if (db.query("SELECT 1 FROM journey_trips WHERE trip_token = ?").get(tt))
       return err(409, "already_in_journey");
+    if (t.settle_currency !== j.settle_currency) return err(400, "settle_currency_mismatch");
     db.run("INSERT INTO journey_trips (journey_token, trip_token) VALUES (?,?)", [j.token, tt]);
     notify.journey(j.token);
     return json({ ok: true });

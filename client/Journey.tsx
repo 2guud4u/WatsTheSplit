@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { api, BASE, fmtUnits, fmt, flag } from "./api.ts";
+import { api, BASE, fmtUnits, fmt, flag, decimals } from "./api.ts";
 import { useTripEvents } from "./hooks.ts";
 import { CopyButton } from "./CopyButton.tsx";
 import { OweCard } from "./OweCard.tsx";
@@ -22,16 +22,22 @@ type JourneyData = {
   persons: Person[];
   members: JMember[];
   mergeHints: { name: string; member_ids: string[]; trips: string[] }[];
-  transfers: { from: string; to: string; amount: number; from_key: string; to_key: string }[];
+  transfers: Transfer[];
   my_member_ids: string[];
-  mergeableTrips: TripRef[];
+  mergeableTrips: (TripRef & { settle_currency: string })[];
 };
+type TransferPart = {
+  trip_token: string; trip_name: string; from_member: string; to_member: string;
+  amount: number; against: boolean;
+};
+type Transfer = { from: string; to: string; amount: number; from_key: string; to_key: string; parts: TransferPart[] };
 
 export default function JourneyView({ token }: { token: string }) {
   const [data, setData] = useState<JourneyData | null>(null);
   const [err, setErr] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [tab, setTab] = useState<"trips" | "owed" | "youowe" | "people">("trips");
+  const [paying, setPaying] = useState<Transfer | null>(null);
 
   const load = useCallback(async () => {
     try { setData(await api.get(`/api/journeys/${token}`)); setErr(""); }
@@ -157,12 +163,17 @@ export default function JourneyView({ token }: { token: string }) {
           {addOpen && (
             <div className="card" style={{ marginTop: 8 }}>
               {data.mergeableTrips.length === 0 && <p className="muted">No other trips available.</p>}
-              {data.mergeableTrips.map((t) => (
-                <div key={t.token} className="expense-row">
-                  <span>{t.name}</span>
-                  <button className="link" onClick={() => addTrip(t.token)}>add</button>
-                </div>
-              ))}
+              {data.mergeableTrips.map((t) => {
+                const ok = t.settle_currency === cur;
+                return (
+                  <div key={t.token} className="expense-row">
+                    <span className={ok ? "" : "muted"}>{t.name}</span>
+                    {ok
+                      ? <button className="link" onClick={() => addTrip(t.token)}>add</button>
+                      : <span className="muted">settles in {t.settle_currency} — journey is {cur}</span>}
+                  </div>
+                );
+              })}
             </div>
           )}
         </>
@@ -185,9 +196,14 @@ export default function JourneyView({ token }: { token: string }) {
                   <OweCard key={tr.from_key + tr.to_key}
                     name={tab === "owed" ? tr.from : tr.to}
                     amount={tr.amount} currency={cur}
-                    dir={tab === "owed" ? "in" : "out"} />
+                    dir={tab === "owed" ? "in" : "out"}
+                    onConfirm={mine.size > 0 ? () => setPaying(tr) : undefined} />
                 ))}
               </div>
+            )}
+            {paying && (
+              <MarkPaidModal transfer={paying} currency={cur} trips={data.trips}
+                onClose={() => setPaying(null)} onDone={() => { setPaying(null); load(); }} />
             )}
           </div>
         );
@@ -231,5 +247,87 @@ export default function JourneyView({ token }: { token: string }) {
         </>
       )}
     </>
+  );
+}
+
+// Mark a journey card paid: pick all trips or some, then record one Settlement
+// per picked trip, for that trip's full debt, between that trip's own Members.
+// Pieces running the other way (the payee owes the payer in that trip) are
+// already netted into the card total, so they can only be settled together
+// with the rest via "all".
+function MarkPaidModal({ transfer, currency, trips, onClose, onDone }: {
+  transfer: Transfer; currency: string; trips: JTrip[];
+  onClose: () => void; onDone: () => void;
+}) {
+  const payable = transfer.parts.filter((p) => !p.against);
+  const against = transfer.parts.filter((p) => p.against);
+  const [picked, setPicked] = useState<Set<string>>(() => new Set(payable.map((p) => p.trip_token)));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const all = picked.size === payable.length;
+  const total = (all ? transfer.parts : payable.filter((p) => picked.has(p.trip_token)))
+    .reduce((s, p) => s + (p.against ? -p.amount : p.amount), 0);
+  const canEdit = (tt: string) => trips.find((t) => t.token === tt)?.access === "edit";
+  const blocked = transfer.parts.filter((p) => (all || picked.has(p.trip_token)) && !canEdit(p.trip_token));
+
+  const submit = async () => {
+    setBusy(true); setError("");
+    try {
+      const settle = all ? transfer.parts : payable.filter((p) => picked.has(p.trip_token));
+      for (const p of settle) {
+        const minor = Math.round(p.amount * 10 ** decimals(currency));
+        if (minor <= 0) continue;
+        await api.post(`/api/trips/${p.trip_token}/settlements`, {
+          from_member: p.from_member, to_member: p.to_member, amount_minor: minor,
+        });
+      }
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "error");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h3>{transfer.from} paid {transfer.to}</h3>
+        <label className="expense-row">
+          <span><input type="checkbox" checked={all}
+            onChange={(e) => setPicked(new Set(e.target.checked ? payable.map((p) => p.trip_token) : []))} /> All trips</span>
+          <b>{fmtUnits(transfer.amount, currency)}</b>
+        </label>
+        {payable.map((p) => (
+          <label key={p.trip_token} className="expense-row" style={{ paddingLeft: 22 }}>
+            <span><input type="checkbox" checked={picked.has(p.trip_token)}
+              onChange={(e) => {
+                const next = new Set(picked);
+                if (e.target.checked) next.add(p.trip_token); else next.delete(p.trip_token);
+                setPicked(next);
+              }} /> {p.trip_name}</span>
+            <span>{fmtUnits(p.amount, currency)}</span>
+          </label>
+        ))}
+        {against.map((p) => (
+          <div key={p.trip_token} className="expense-row muted" style={{ paddingLeft: 22 }}>
+            <span>{p.trip_name} — {transfer.to} owes {transfer.from}, netted in</span>
+            <span>−{fmtUnits(p.amount, currency)}</span>
+          </div>
+        ))}
+        {against.length > 0 && !all && (
+          <p className="muted">Trips where {transfer.to} owes {transfer.from} are only settled with "All trips".</p>
+        )}
+        {blocked.length > 0 && (
+          <p className="warn">Pick your name in {blocked.map((p) => p.trip_name).join(", ")} first — you can only record payments in trips you've joined.</p>
+        )}
+        {error && <div className="error">{error}</div>}
+        <div className="modal-btns">
+          <button className="link" onClick={onClose}>Cancel</button>
+          <button className="primary" disabled={busy || picked.size === 0 || blocked.length > 0} onClick={submit}>
+            Record {fmtUnits(total, currency)}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

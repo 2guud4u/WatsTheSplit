@@ -1,6 +1,5 @@
 import { db } from "./db.ts";
 import { decimals } from "./currencies.ts";
-import { crossRate } from "./fx.ts";
 import type { Trip, Journey, Member, ExpenseRow } from "./types.ts";
 
 const qMember = db.prepare<Member, [string]>("SELECT * FROM members WHERE id = ?");
@@ -169,34 +168,6 @@ export function journeyTrips(j: Journey): Trip[] {
   ).all(j.token).map((r) => qTrip.get(r.trip_token)).filter((t): t is Trip => !!t);
 }
 
-// Per-member net in settle-currency *units* (positive = owed money).
-function netPositions(t: Trip): Map<string, number> {
-  const dec = decimals(t.settle_currency);
-  const net = new Map<string, number>();
-  const add = (id: string, v: number) => net.set(id, (net.get(id) ?? 0) + v);
-  for (const e of db.query<ExpenseRow, [string]>(
-    "SELECT * FROM expenses WHERE trip_token = ?",
-  ).all(t.token)) {
-    if (!e.payer_member_id) continue;
-    const paid = paidMembers(e.id);
-    const rate = e.currency === t.settle_currency ? 1 : e.rate;
-    if (rate === null) continue;
-    for (const s of effectiveShares(e)) {
-      if (s.minor === null || paid.has(s.member_id)) continue;
-      const units = (s.minor / 10 ** decimals(e.currency)) * rate;
-      add(e.payer_member_id, units);
-      if (s.member_id !== e.payer_member_id) add(s.member_id, -units);
-    }
-  }
-  for (const s of db.query<{ from_member: string; to_member: string; amount_minor: number }, [string]>(
-    "SELECT from_member, to_member, amount_minor FROM settlements WHERE trip_token = ?",
-  ).all(t.token)) {
-    add(s.from_member, s.amount_minor / 10 ** dec);
-    add(s.to_member, -s.amount_minor / 10 ** dec);
-  }
-  return net;
-}
-
 export type JourneyMember = Member & { trip_name?: string };
 
 // Person key: linked members share their user_sub; manual merges share a
@@ -231,48 +202,44 @@ export function journeyPeople(j: Journey): { persons: Map<string, { name: string
   return { persons, keyOf };
 }
 
+// Journey "who owes who": each trip's own pairwise debts (the same numbers the
+// trip page shows), re-keyed by Person and summed across trips. No cross-person
+// simplification, so every card decomposes into real per-trip debts that can be
+// settled trip by trip. All trips share one Settlement Currency (enforced on add).
 export function journeyBalance(j: Journey) {
   const { persons, keyOf } = journeyPeople(j);
-  const jDec = decimals(j.settle_currency);
-  const net = new Map<string, number>(); // person key -> journey-currency units
-  const perTrip: { token: string; name: string; settle_currency: string; converted: boolean; balances: { person: string; net: number }[] }[] = [];
+  const dec = decimals(j.settle_currency);
+  type Part = { trip_token: string; trip_name: string; from_member: string; to_member: string; from_key: string; amount: number };
+  const pairs = new Map<string, { from_key: string; to_key: string; amount: number; parts: Part[] }>();
   for (const t of journeyTrips(j)) {
-    const nets = netPositions(t);
-    const conv = t.settle_currency === j.settle_currency
-      ? { rate: 1 }
-      : crossRate(t.settle_currency, j.settle_currency);
-    const members = db.query<Member, [string]>("SELECT * FROM members WHERE trip_token = ?").all(t.token);
-    const rows: { person: string; net: number }[] = [];
-    for (const [mid, v] of nets) {
-      const m = members.find((mm) => mm.id === mid);
-      if (!m || Math.abs(v) < 1e-9) continue;
-      const key = keyOf(m);
-      const person = persons.get(key)?.name ?? m.name;
-      rows.push({ person, net: v });
-      if (conv) net.set(key, (net.get(key) ?? 0) + v * conv.rate);
+    const { members, pairs: tripPairs } = tripBalances(t);
+    const byId = new Map(members.map((m) => [m.id, m]));
+    for (const p of tripPairs) {
+      const a = byId.get(p.from), b = byId.get(p.to);
+      if (!a || !b) continue;
+      let fk = keyOf(a), tk = keyOf(b), amt = p.amount;
+      if (fk === tk) continue; // same Person on both sides after a merge
+      // one entry per unordered Person pair, summed in a canonical direction
+      if (fk > tk) { [fk, tk] = [tk, fk]; amt = -amt; }
+      const key = `${fk}>${tk}`;
+      const cur = pairs.get(key) ?? { from_key: fk, to_key: tk, amount: 0, parts: [] };
+      cur.amount += amt;
+      cur.parts.push({ trip_token: t.token, trip_name: t.name, from_member: p.from, to_member: p.to, from_key: keyOf(a), amount: p.amount });
+      pairs.set(key, cur);
     }
-    perTrip.push({ token: t.token, name: t.name, settle_currency: t.settle_currency, converted: !!conv, balances: rows.sort((a, b) => a.net - b.net) });
   }
-  // greedy simplify: largest debtor pays largest creditor
-  const debtors = [...net.entries()].filter(([, v]) => v < -1e-6).map(([k, v]) => ({ k, v: -v })).sort((a, b) => b.v - a.v);
-  const creditors = [...net.entries()].filter(([, v]) => v > 1e-6).map(([k, v]) => ({ k, v })).sort((a, b) => b.v - a.v);
-  const transfers: { from: string; to: string; amount: number; from_key: string; to_key: string }[] = [];
-  let i = 0, jj = 0;
-  while (i < debtors.length && jj < creditors.length) {
-    const pay = Math.min(debtors[i].v, creditors[jj].v);
-    transfers.push({
-      from: persons.get(debtors[i].k)?.name ?? "?",
-      to: persons.get(creditors[jj].k)?.name ?? "?",
-      from_key: debtors[i].k, to_key: creditors[jj].k,
-      amount: Math.round(pay * 10 ** jDec) / 10 ** jDec,
-    });
-    debtors[i].v -= pay; creditors[jj].v -= pay;
-    if (debtors[i].v < 1e-6) i++;
-    if (creditors[jj].v < 1e-6) jj++;
-  }
-  const positions = [...net.entries()].map(([k, v]) => ({
-    person: persons.get(k)?.name ?? "?", net: Math.round(v * 10 ** jDec) / 10 ** jDec,
-  })).sort((a, b) => a.net - b.net);
-  return { transfers, positions, perTrip };
+  const eps = 0.5 / 10 ** dec;
+  const round = (v: number) => Math.round(v * 10 ** dec) / 10 ** dec;
+  const transfers = [...pairs.values()].filter((p) => Math.abs(p.amount) >= eps).map((p) => {
+    const fwd = p.amount > 0;
+    const from_key = fwd ? p.from_key : p.to_key, to_key = fwd ? p.to_key : p.from_key;
+    return {
+      from: persons.get(from_key)?.name ?? "?", to: persons.get(to_key)?.name ?? "?",
+      from_key, to_key, amount: round(Math.abs(p.amount)),
+      // per-trip debts; `against` marks a trip where the card's payee owes the payer
+      parts: p.parts.map(({ from_key: pk, ...x }) => ({ ...x, amount: round(x.amount), against: pk !== from_key })),
+    };
+  });
+  return { transfers };
 }
 

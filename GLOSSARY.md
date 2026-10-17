@@ -9,7 +9,7 @@ A named, dated group of people who share costs, with one Trip Currency and one S
 _Avoid_: Group, event
 
 **Journey**:
-A named group of Trips that share one "who owes who" view, in a Journey Currency. Reachable from inside any member Trip; a Trip belongs to at most one Journey.
+A named group of Trips that share one "who owes who" view. Every Trip in it has the same Settlement Currency, which is also the Journey's. Reachable from inside any member Trip; a Trip belongs to at most one Journey.
 _Avoid_: Folder, collection
 
 **Journey Link**:
@@ -56,11 +56,8 @@ _Avoid_: Default currency, local currency
 
 **Settlement Currency**:
 The currency all Balances and Settlements on a Trip are shown in.
-_Avoid_: Group currency, home currency, base currency
-
-**Journey Currency**:
-The currency a Journey's shared Balance is shown in.
-_Avoid_: Group currency
+The currency all Balances and Settlements on a Trip are shown in. A Journey uses the shared Settlement Currency of its Trips.
+_Avoid_: Group currency, home currency, base currency, journey currency
 
 **Locked Rate**:
 The exchange rate from an Expense's currency to the Settlement Currency, taken when the Expense is created and taken again only if its currency changes.
