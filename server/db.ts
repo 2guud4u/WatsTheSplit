@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS trips (
   trip_currency     TEXT NOT NULL,
   settle_currency   TEXT NOT NULL,
   password_hash     TEXT,
+  password_text     TEXT,
   password_ver      INTEGER NOT NULL DEFAULT 0,
   created_at        TEXT NOT NULL
 );
@@ -147,4 +148,8 @@ if (!db.query("SELECT 1 FROM pragma_table_info('members') WHERE name='detail_vie
 
 if (!db.query("SELECT 1 FROM pragma_table_info('expenses') WHERE name='created_by_member_id'").get()) {
   db.exec("ALTER TABLE expenses ADD COLUMN created_by_member_id TEXT REFERENCES members(id) ON DELETE SET NULL");
+}
+
+if (!db.query("SELECT 1 FROM pragma_table_info('trips') WHERE name='password_text'").get()) {
+  db.exec("ALTER TABLE trips ADD COLUMN password_text TEXT");
 }

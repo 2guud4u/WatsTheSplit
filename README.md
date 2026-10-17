@@ -44,7 +44,7 @@ Google consent screen: apps under 100 users or in testing mode skip verification
 - **Locked rate** — stored per expense at creation (rate, provider timestamp); re-fetched only if the currency changes.
 - **Balances** — pairwise nets in settlement currency; settlements recorded in settlement currency.
 - **Live updates** — Server-Sent Events per trip.
-- **Trip password** — optional; setting/changing revokes all non-linked sessions until re-entered.
+- **Trip password** — required at creation. The invite link carries it in the URL fragment (`#/t/<token>?pw=…`), so the link unlocks the trip seamlessly; a bare link (no `?pw=`) still prompts. Changing it re-prompts every device except signed-in members. Stored in plaintext alongside the hash so the invite URL can embed it — consistent with link = access.
 
 Design rationale: `docs/adr/`. Vocabulary: `GLOSSARY.md`.
 

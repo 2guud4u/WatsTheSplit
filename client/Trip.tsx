@@ -13,7 +13,7 @@ type Settlement = { id: string; from_member: string; to_member: string; amount_m
 type TripData = {
   trip: {
     token: string; name: string; start_date: string | null; end_date: string | null;
-    trip_currency: string; settle_currency: string; has_password: boolean; fun_leaderboard: boolean;
+    trip_currency: string; settle_currency: string; has_password: boolean; password: string | null; fun_leaderboard: boolean;
   };
   me: { id: string; name: string; linked: boolean; opted_out_fun?: boolean } | null;
   signed_in: boolean;
@@ -114,6 +114,18 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
     return () => { es.close(); removeEventListener("focus", onFocus); };
   }, [token]);
 
+  // Share links carry ?pw= in the hash (never sent to the server); on first
+  // load it unlocks the trip and gets scrubbed from the URL.
+  useEffect(() => {
+    const m = /\?pw=([^&]*)/.exec(location.hash);
+    if (!m) return;
+    const pw = decodeURIComponent(m[1]);
+    history.replaceState(null, "", location.pathname + location.search + location.hash.replace(/\?pw=[^&]*/, ""));
+    api.post(`/api/trips/${token}/password`, { password: pw })
+      .then(() => { setNeedsPassword(false); load(); })
+      .catch(() => setNeedsPassword(true));
+  }, [token]);
+
   if (needsPassword) {
     return (
       <>
@@ -188,7 +200,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
 
   const me = data.me;
   const myPairs = data.balances.filter((p) => p.from === me.id || p.to === me.id);
-  const inviteUrl = `${location.origin}${BASE}/#/t/${token}`;
+  const inviteUrl = `${location.origin}${BASE}/#/t/${token}${t.password ? `?pw=${encodeURIComponent(t.password)}` : ""}`;
 
   const createExpense = async () => {
     if (!expName.trim() || !expTotal) return;
@@ -596,18 +608,14 @@ function Settings({ data, token, currencies, reload, setShow }: {
       <div className="field">
         <label className="field-label">Trip password</label>
         <div className="row">
-          <input type="password" value={pw} placeholder={t.has_password ? "Set new password" : "No password set"}
+          <input type="password" value={pw} placeholder="New trip password"
             onChange={(e) => setPw(e.target.value)} />
           <button disabled={!pw} onClick={async () => {
             await api.patch(`/api/trips/${token}/settings`, { password: pw });
             setPw(""); reload();
-          }}>Set</button>
-          {t.has_password && <button className="danger" onClick={async () => {
-            await api.patch(`/api/trips/${token}/settings`, { password: "" });
-            reload();
-          }}>Remove</button>}
+          }}>Change</button>
         </div>
-        <p className="muted">Changing it re-prompts every device except signed-in members.</p>
+        <p className="muted">Every trip keeps a password. Changing it re-prompts every device except signed-in members.</p>
       </div>
 
       <div className="field">

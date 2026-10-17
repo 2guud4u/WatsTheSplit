@@ -61,12 +61,16 @@ const bob = new Dev();
 // --- create + join ---
 const trip = (await alice.post("/api/trips", {
   name: "Japan", start_date: "2026-11-01", end_date: "2026-11-10",
-  trip_currency: "JPY", settle_currency: "USD",
+  trip_currency: "JPY", settle_currency: "USD", password: "nabe",
 })).data;
 check("create trip", !!trip.token, trip);
+
+// password required at creation
+let r = await bob.post("/api/trips", { name: "x", trip_currency: "USD", settle_currency: "USD" });
+check("create without password rejected", r.status === 400 && r.data.error === "password_required");
 const T = `/api/trips/${trip.token}`;
 
-let r = await alice.get(T);
+r = await alice.get(T);
 check("new session sees trip w/o me", r.data.me === null && r.data.trip.name === "Japan");
 
 r = await alice.post(`${T}/claim`, { name: "Alice" });
@@ -77,6 +81,9 @@ r = await alice.post(`${T}/members`, { name: "Bob" });
 const bobId = r.data.id;
 r = await alice.post(`${T}/members`, { name: "Carol" });
 const carolId = r.data.id;
+
+r = await bob.post(`${T}/password`, { password: "nabe" });
+check("bob consents via password", r.data.ok);
 
 r = await bob.post(`${T}/claim`, { member_id: bobId });
 check("bob claims placeholder", r.data.ok);
@@ -169,17 +176,19 @@ check("unused member removable", r.data.ok);
 r = await alice.del(`/api/members/${bobId}`);
 check("used member not removable", r.status === 400 && r.data.error === "member_in_use");
 
-// --- password ---
+// --- password: changing revokes; removal rejected ---
 const dave = new Dev();
-await alice.patch(`${T}/settings`, { password: "sushi" });
 r = await dave.get(T);
 check("password blocks new device", r.status === 401 && r.data.error === "password_required");
-r = await dave.post(`${T}/password`, { password: "wrong" });
-check("wrong password rejected", r.status === 403);
-r = await dave.post(`${T}/password`, { password: "sushi" });
+r = await dave.post(`${T}/password`, { password: "nabe" });
 check("right password opens", r.data.ok);
 r = await dave.get(T);
 check("dave sees trip after password", r.data.trip.name === "Japan");
+check("trip payload exposes password for invite link", r.data.trip.password === "nabe");
+r = await alice.patch(`${T}/settings`, { password: "" });
+check("password removal rejected", r.status === 400);
+await alice.patch(`${T}/settings`, { password: "sushi" });
+
 
 // changing password revokes existing sessions
 await alice.patch(`${T}/settings`, { password: "ramen" });

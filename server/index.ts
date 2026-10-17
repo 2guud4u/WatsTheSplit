@@ -19,6 +19,7 @@ type Member = {
 type Trip = {
   token: string; name: string; start_date: string | null; end_date: string | null;
   trip_currency: string; settle_currency: string; password_hash: string | null;
+  password_text: string | null;
   password_ver: number; fun_leaderboard: number; created_by_token: string | null;
 };
 
@@ -518,6 +519,8 @@ const routes: Route[] = [
     const tc = String(body.trip_currency ?? "").toUpperCase();
     const sc = String(body.settle_currency ?? "").toUpperCase();
     if (!isCurrency(tc) || !isCurrency(sc)) return err(400, "bad_currency");
+    const pw = String(body.password ?? "").trim();
+    if (!pw) return err(400, "password_required");
     const token = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
     // optional pre-added members: comma/line-separated, deduped case-insensitively
     const raw = Array.isArray(body.members) ? body.members.join(",") : String(body.members ?? "");
@@ -527,11 +530,16 @@ const routes: Route[] = [
     }
     const names = [...seen.values()];
     db.run(
-      `INSERT INTO trips (token, name, start_date, end_date, trip_currency, settle_currency, created_at)
-       VALUES (?,?,?,?,?,?,?)`,
-      [token, name, body.start_date ? String(body.start_date) : null, body.end_date ? String(body.end_date) : null, tc, sc, now()],
+      `INSERT INTO trips (token, name, start_date, end_date, trip_currency, settle_currency,
+         password_hash, password_text, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [token, name, body.start_date ? String(body.start_date) : null, body.end_date ? String(body.end_date) : null,
+       tc, sc, await Bun.password.hash(pw), pw, now()],
     );
     db.run("UPDATE trips SET created_by_token = ? WHERE token = ?", [session.token, token]);
+    // creator's session counts as having entered the password (ver starts at 0)
+    db.run("INSERT OR REPLACE INTO consents (session_token, trip_token, password_ver) VALUES (?,?,0)",
+      [session.token, token]);
     for (const n of names) {
       db.run("INSERT INTO members (id, trip_token, name, user_sub, created_at) VALUES (?,?,?,NULL,?)",
         [crypto.randomUUID(), token, n, now()]);
@@ -550,7 +558,7 @@ const routes: Route[] = [
       trip: {
         token: t.token, name: t.name, start_date: t.start_date, end_date: t.end_date,
         trip_currency: t.trip_currency, settle_currency: t.settle_currency,
-        has_password: !!t.password_hash, fun_leaderboard: !!t.fun_leaderboard,
+        has_password: !!t.password_hash, password: t.password_text, fun_leaderboard: !!t.fun_leaderboard,
       },
       me: me ? { id: me.id, name: me.name, linked: !!me.user_sub, opted_out_fun: !!me.opted_out_fun } : null,
       signed_in: !!s.user_sub,
@@ -615,11 +623,10 @@ const routes: Route[] = [
     if (body.password !== undefined) {
       const pw = String(body.password);
       if (pw === "") {
-        db.run("UPDATE trips SET password_hash = NULL, password_ver = password_ver + 1 WHERE token = ?", [t.token]);
-        db.run("DELETE FROM consents WHERE trip_token = ?", [t.token]);
+        return err(400, "password_required"); // trips must keep a password
       } else {
-        db.run("UPDATE trips SET password_hash = ?, password_ver = password_ver + 1 WHERE token = ?",
-          [await Bun.password.hash(pw), t.token]);
+        db.run("UPDATE trips SET password_hash = ?, password_text = ?, password_ver = password_ver + 1 WHERE token = ?",
+          [await Bun.password.hash(pw), pw, t.token]);
         // revoke all existing consents, then re-grant the acting session at the new version
         db.run("DELETE FROM consents WHERE trip_token = ?", [t.token]);
         const ver = db.query<{ password_ver: number }, [string]>(

@@ -16,9 +16,10 @@ export function seedDemo(): string | null {
   try {
     db.run(
       `INSERT INTO trips (token, name, start_date, end_date, trip_currency, settle_currency,
-         password_hash, password_ver, fun_leaderboard, created_by_token, created_at)
-       VALUES (?,?,?,?,?,?, NULL, 0, 1, NULL, ?)`,
-      [DEMO_TOKEN, "Demo Trip · Chiang Mai 🌴", "2026-10-10", "2026-10-14", "THB", "USD", now()],
+         password_hash, password_text, password_ver, fun_leaderboard, created_by_token, created_at)
+       VALUES (?,?,?,?,?,?, ?, 'demo', 0, 1, NULL, ?)`,
+      [DEMO_TOKEN, "Demo Trip · Chiang Mai 🌴", "2026-10-10", "2026-10-14", "THB", "USD",
+       Bun.password.hashSync("demo"), now()],
     );
 
     const members: Record<string, string> = {};

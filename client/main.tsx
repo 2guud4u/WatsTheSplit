@@ -21,7 +21,7 @@ declare global {
 
 type Me = { user: { google_sub: string; email: string; name: string; picture: string } | null };
 
-const route = () => location.hash.slice(1) || "/";
+const route = () => location.hash.slice(1).split("?")[0] || "/";
 
 // ---------- Google sign-in ----------
 function useGoogle(config: Config | null, onSignedIn: () => void) {
@@ -80,6 +80,7 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
   const [tripCur, setTripCur] = useState("");
   const [settleCur, setSettleCur] = useState("");
   const [membersText, setMembersText] = useState("");
+  const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
   const currencies = config?.currencies ?? [];
 
@@ -88,7 +89,7 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
       const r = await api.post("/api/trips", {
         name, start_date: start || null, end_date: end || null,
         trip_currency: tripCur, settle_currency: settleCur,
-        members: membersText,
+        password: pw, members: membersText,
       });
       addRecent(r.token, name);
       location.hash = `#/t/${r.token}`;
@@ -122,7 +123,13 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
           <input className="wide" value={name} onChange={(e) => setName(e.target.value)}
             placeholder="Trip name — e.g. Japan 2026"
             onKeyDown={(e) => e.key === "Enter" && create()} />
-          <button className="primary" onClick={create} disabled={!name.trim() || !tripCur || !settleCur}>Create trip</button>
+        </div>
+        <div className="row">
+          <input className="wide" type="text" value={pw} onChange={(e) => setPw(e.target.value)}
+            placeholder="Trip password — anyone with the link still needs it"
+            onKeyDown={(e) => e.key === "Enter" && create()} />
+          <button className="primary" onClick={create}
+            disabled={!name.trim() || !tripCur || !settleCur || !pw.trim()}>Create trip</button>
         </div>
         <div className="row">
           <div className="field"><label className="field-label">Trip currency</label>
