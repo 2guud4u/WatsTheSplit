@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { api, toMinor, fmt, decimals, CATEGORIES, CURRENCY_COUNTRIES } from "./api.ts";
+import { api, BASE, toMinor, fmt, decimals, CATEGORIES, CURRENCY_COUNTRIES } from "./api.ts";
 import { CurrencyPicker } from "./CurrencyPicker.tsx";
 
 type Member = { id: string; name: string };
@@ -83,7 +83,7 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
 
   useEffect(() => {
     load();
-    const es = new EventSource(`/api/trips/${token}/events`);
+    const es = new EventSource(`${BASE}/api/trips/${token}/events`);
     es.onmessage = () => load();
     return () => es.close();
   }, [token, expenseId]);
@@ -287,8 +287,8 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
         <div className="photo-grid">
           {(e.photos ?? []).map((id) => (
             <div key={id} className="photo-cell">
-              <a href={`/api/photos/${id}`} target="_blank" rel="noreferrer">
-                <img src={`/api/photos/${id}`} alt="expense photo" />
+              <a href={`${BASE}/api/photos/${id}`} target="_blank" rel="noreferrer">
+                <img src={`${BASE}/api/photos/${id}`} alt="expense photo" />
               </a>
               <button className="link danger photo-del"
                 onClick={async () => { await api.del(`/api/photos/${id}`); load(); }}>✕</button>

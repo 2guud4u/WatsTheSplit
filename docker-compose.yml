@@ -15,6 +15,7 @@ services:
     environment:
       - PORT=8081
       - DB_PATH=/data/data.db
+      - BASE_PATH=/watsthesplit
     volumes:
       # SQLite data.db lives on the host at ~/wts/data/data.db.
       - /home/jia/wts/data:/data

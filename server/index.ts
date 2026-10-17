@@ -6,6 +6,9 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 const PORT = Number(process.env.PORT ?? 8081);
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? "";
 const BASE_URL = (process.env.BASE_URL ?? `http://localhost:${PORT}`).replace(/\/$/, "");
+// Serve under a path prefix when set (e.g. BASE_PATH=/watsthesplit on jiathe.dev).
+// The tunnel forwards unprefixed-path URLs, so we strip it before routing.
+const BASE_PATH = (process.env.BASE_PATH ?? "").replace(/\/$/, "");
 const COOKIE = "wts_session";
 const DIST = new URL("../dist", import.meta.url).pathname;
 
@@ -1119,9 +1122,6 @@ const routes: Route[] = [
 
 // ---------- server ----------
 async function handle(req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  const path = url.pathname;
-
   if (req.method !== "GET" && !req.headers.get("x-wts")) {
     return err(403, "missing_header"); // cheap CSRF guard for cookie auth
   }
@@ -1131,6 +1131,13 @@ async function handle(req: Request): Promise<Response> {
     try { body = await req.json(); } catch { return err(400, "bad_json"); }
   }
 
+  const url = new URL(req.url);
+  let path = url.pathname;
+  if (BASE_PATH) {
+    if (path === BASE_PATH) path = "/";
+    else if (path.startsWith(BASE_PATH + "/")) path = path.slice(BASE_PATH.length);
+    else return err(404, "not_found");
+  }
   const isApi = path.startsWith("/api/");
   const { headers: sessionHeaders } = isApi ? ensureSession(req) : { headers: {} };
 

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import qrcode from "qrcode-generator";
-import { api, Config, toMinor, fmt, fmtUnits, decimals, flag, CATEGORIES } from "./api.ts";
+import { api, BASE, Config, toMinor, fmt, fmtUnits, decimals, flag, CATEGORIES } from "./api.ts";
 import { addRecent } from "./main.tsx";
 import { CurrencyPicker } from "./CurrencyPicker.tsx";
 type Member = { id: string; name: string; linked: boolean; used: boolean; is_me: boolean; opted_out_fun?: boolean };
@@ -107,7 +107,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
 
   useEffect(() => {
     load();
-    const es = new EventSource(`/api/trips/${token}/events`);
+    const es = new EventSource(`${BASE}/api/trips/${token}/events`);
     es.onmessage = () => load();
     const onFocus = () => load();
     addEventListener("focus", onFocus);
@@ -188,7 +188,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
 
   const me = data.me;
   const myPairs = data.balances.filter((p) => p.from === me.id || p.to === me.id);
-  const inviteUrl = `${location.origin}/#/t/${token}`;
+  const inviteUrl = `${location.origin}${BASE}/#/t/${token}`;
 
   const createExpense = async () => {
     if (!expName.trim() || !expTotal) return;

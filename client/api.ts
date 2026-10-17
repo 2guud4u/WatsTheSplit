@@ -1,7 +1,11 @@
 export type Config = { googleClientId: string; baseUrl: string; currencies: string[] };
 
+// Deployed under BASE_PATH (e.g. /watsthesplit) — vite base bakes it into
+// import.meta.env.BASE_URL; strip its trailing slash for path joins.
+export const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+
 async function req(method: string, url: string, body?: unknown) {
-  const res = await fetch(url, {
+  const res = await fetch(BASE + url, {
     method,
     headers: { "x-wts": "1", ...(body !== undefined ? { "content-type": "application/json" } : {}) },
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -24,7 +28,7 @@ export const api = {
   put: (u: string, b: unknown) => req("PUT", u, b),
   del: (u: string, b?: unknown) => req("DELETE", u, b),
   upload: async (u: string, file: File) => {
-    const res = await fetch(u, {
+    const res = await fetch(BASE + u, {
       method: "POST",
       headers: { "x-wts": "1", "content-type": file.type },
       body: file,
