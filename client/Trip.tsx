@@ -13,6 +13,7 @@ type Settlement = { id: string; from_member: string; to_member: string; amount_m
 type TripData = {
   trip: {
     token: string; name: string; start_date: string | null; end_date: string | null;
+    created_at: string;
     trip_currency: string; settle_currency: string; has_password: boolean; password: string | null; fun_leaderboard: boolean;
   };
   me: { id: string; name: string; linked: boolean; opted_out_fun?: boolean } | null;
@@ -107,24 +108,23 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
   }, [token]);
 
   useEffect(() => {
-    load();
+    (async () => {
+      // Share links carry ?pw= in the hash (never sent to the server). POST it
+      // BEFORE the first load: both would otherwise race to create separate
+      // anonymous sessions and consent could land on the losing cookie.
+      const m = /\?pw=([^&]*)/.exec(location.hash);
+      if (m) {
+        const pw = decodeURIComponent(m[1]);
+        history.replaceState(null, "", location.pathname + location.search + location.hash.replace(/\?pw=[^&]*/, ""));
+        await api.post(`/api/trips/${token}/password`, { password: pw }).catch(() => {});
+      }
+      load();
+    })();
     const es = new EventSource(`${BASE}/api/trips/${token}/events`);
     es.onmessage = () => load();
     const onFocus = () => load();
     addEventListener("focus", onFocus);
     return () => { es.close(); removeEventListener("focus", onFocus); };
-  }, [token]);
-
-  // Share links carry ?pw= in the hash (never sent to the server); on first
-  // load it unlocks the trip and gets scrubbed from the URL.
-  useEffect(() => {
-    const m = /\?pw=([^&]*)/.exec(location.hash);
-    if (!m) return;
-    const pw = decodeURIComponent(m[1]);
-    history.replaceState(null, "", location.pathname + location.search + location.hash.replace(/\?pw=[^&]*/, ""));
-    api.post(`/api/trips/${token}/password`, { password: pw })
-      .then(() => { setNeedsPassword(false); load(); })
-      .catch(() => setNeedsPassword(true));
   }, [token]);
 
   if (needsPassword) {
@@ -214,6 +214,10 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
     location.hash = `#/t/${token}/e/${r.id}`;
   };
 
+  // Trip Wrapped unlocks at trip end — or 5 days after creation when no end date is set.
+  const wrappedAt = t.end_date ? `${t.end_date}T23:59:59` : new Date(new Date(t.created_at).getTime() + 5 * 86400e3).toISOString();
+  const wrappedLive = t.fun_leaderboard && Date.now() >= Date.parse(wrappedAt);
+
   return (
     <>
       <div className="row" style={{ justifyContent: "space-between" }}>
@@ -223,6 +227,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
       <p className="muted" style={{ marginTop: 0 }}>
         {data.current_rate && t.trip_currency !== t.settle_currency
           ? `1 ${t.trip_currency} ≈ ${data.current_rate.rate.toPrecision(6)} ${t.settle_currency} · 1 ${t.settle_currency} ≈ ${(1 / data.current_rate.rate).toPrecision(6)} ${t.trip_currency}`
+
           : t.trip_currency === t.settle_currency ? "same currency — no conversion" : "no exchange rate yet"}
       </p>
       <p className="muted">
@@ -251,7 +256,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
 
       {showSettings && <Settings data={data} token={token} currencies={currencies} reload={load}
         setShow={setShowSettings} />}
-      {t.fun_leaderboard && funBanner && (
+      {wrappedLive && funBanner && (
         <div className="card fun-notice">
           <p className="muted" style={{ margin: 0 }}>
             🎁 <b>Trip Wrapped</b> is on — the trip creator enabled silly awards from this trip's expense data (who pays, owes, drinks, eats).
@@ -276,7 +281,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
         <button className={tab === "expenses" ? "active" : ""} onClick={() => setTab("expenses")}>Expenses</button>
         <button className={tab === "owed" ? "active" : ""} onClick={() => setTab("owed")}>Who owes you</button>
         <button className={tab === "youowe" ? "active" : ""} onClick={() => setTab("youowe")}>Who you owe</button>
-        {t.fun_leaderboard && (
+        {wrappedLive && (
           <button className={tab === "fun" ? "active" : ""} onClick={() => setTab("fun")}>🎁 Trip Wrapped</button>
         )}
       </div>

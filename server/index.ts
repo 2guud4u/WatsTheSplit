@@ -20,6 +20,7 @@ type Trip = {
   token: string; name: string; start_date: string | null; end_date: string | null;
   trip_currency: string; settle_currency: string; password_hash: string | null;
   password_text: string | null;
+  created_at: string;
   password_ver: number; fun_leaderboard: number; created_by_token: string | null;
 };
 
@@ -557,6 +558,7 @@ const routes: Route[] = [
     return json({
       trip: {
         token: t.token, name: t.name, start_date: t.start_date, end_date: t.end_date,
+        created_at: t.created_at,
         trip_currency: t.trip_currency, settle_currency: t.settle_currency,
         has_password: !!t.password_hash, password: t.password_text, fun_leaderboard: !!t.fun_leaderboard,
       },
@@ -595,7 +597,9 @@ const routes: Route[] = [
   }],
 
   [/^\/api\/trips\/([A-Za-z0-9]+)\/password$/, "POST", async (req, m, body) => {
-    const s = sessionFrom(req) ?? { token: "", user_sub: null };
+    // ensureSession (not sessionFrom): this can be the client's very first call
+    // when a ?pw= share link opens straight to a locked trip.
+    const { session: s, headers } = ensureSession(req);
     const trip = qTrip.get(m[1]);
     if (!trip) return err(404, "trip_not_found");
     let ok = false;
@@ -604,7 +608,7 @@ const routes: Route[] = [
     if (!ok) return err(403, "wrong_password");
     db.run("INSERT OR REPLACE INTO consents (session_token, trip_token, password_ver) VALUES (?,?,?)",
       [s.token, trip.token, trip.password_ver]);
-    return json({ ok: true });
+    return json({ ok: true }, { headers });
   }],
 
   [/^\/api\/trips\/([A-Za-z0-9]+)\/settings$/, "PATCH", async (req, m, body) => {
