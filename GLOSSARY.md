@@ -55,7 +55,6 @@ The currency preselected for new Expenses on a Trip; each Expense can still use 
 _Avoid_: Default currency, local currency
 
 **Settlement Currency**:
-The currency all Balances and Settlements on a Trip are shown in.
 The currency all Balances and Settlements on a Trip are shown in. A Journey uses the shared Settlement Currency of its Trips.
 _Avoid_: Group currency, home currency, base currency, journey currency
 
