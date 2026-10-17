@@ -205,6 +205,20 @@ button.member-chip:hover:not(:disabled) { border-color: var(--accent); }
 }
 .pill { font-size: 11px; color: var(--muted); font-weight: 500; }
 
+/* ---------- member pills (create-trip modal) ---------- */
+.pills { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.member-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 8px 4px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface);
+  font-size: 13px; font-weight: 600;
+}
+.pill-x {
+  border: none; background: none; padding: 0 2px; cursor: pointer;
+  color: var(--muted); font-size: 11px; line-height: 1;
+}
+.pill-x:hover { color: var(--error); }
+
 /* ---------- badges & text ---------- */
 .muted { color: var(--muted); font-size: 13px; }
 .error { color: var(--error); font-size: 13px; }

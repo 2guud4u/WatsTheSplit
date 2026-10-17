@@ -79,7 +79,8 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
   const [end, setEnd] = useState("");
   const [tripCur, setTripCur] = useState("");
   const [settleCur, setSettleCur] = useState("");
-  const [membersText, setMembersText] = useState("");
+  const [members, setMembers] = useState<string[]>([]);
+  const [memberInput, setMemberInput] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
@@ -90,11 +91,18 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
       const r = await api.post("/api/trips", {
         name, start_date: start || null, end_date: end || null,
         trip_currency: tripCur, settle_currency: settleCur,
-        password: pw, members: membersText,
+        password: pw, members,
       });
       addRecent(r.token, name);
       location.hash = `#/t/${r.token}`;
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+  };
+
+  const addMember = () => {
+    const n = memberInput.trim();
+    if (!n) return;
+    if (!members.some((m) => m.toLowerCase() === n.toLowerCase())) setMembers([...members, n]);
+    setMemberInput("");
   };
 
   return (
@@ -138,9 +146,25 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
                 <CurrencyPicker value={settleCur} options={currencies} onChange={setSettleCur} /></div>
             </div>
             <div className="field"><label className="field-label">Members (optional)</label>
-              <input className="wide" value={membersText}
-                placeholder="Alice, Bob, Carol — they pick their name when they join"
-                onChange={(e) => setMembersText(e.target.value)} /></div>
+              {members.length > 0 && (
+                <div className="pills">
+                  {members.map((m) => (
+                    <span key={m} className="member-pill">
+                      {m}
+                      <button className="pill-x" onClick={() => setMembers(members.filter((x) => x !== m))}
+                        aria-label={`Remove ${m}`}>✕</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="row">
+                <input className="wide" value={memberInput}
+                  placeholder="Add a name — they'll pick it when they join"
+                  onChange={(e) => setMemberInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addMember(); } }} />
+                <button onClick={addMember} disabled={!memberInput.trim()}>Add</button>
+              </div>
+            </div>
             <details className="more">
               <summary>Dates (optional)</summary>
               <div className="row">
