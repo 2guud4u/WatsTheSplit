@@ -1348,6 +1348,27 @@ const routes: Route[] = [
     });
   }],
 
+  // distinct member names across this session's accessible trips, most-used first
+  [/^\/api\/member-suggestions$/, "GET", async (req) => {
+    const s = sessionFrom(req);
+    if (!s) return json({ suggestions: [] });
+    const trips = accessibleTrips(s);
+    if (!trips.length) return json({ suggestions: [] });
+    const q = db.prepare<{ name: string; n: number }, [string]>(
+      "SELECT name, COUNT(*) n FROM members WHERE trip_token = ? GROUP BY name COLLATE NOCASE");
+    const counts = new Map<string, { name: string; n: number }>();
+    for (const t of trips)
+      for (const r of q.all(t.token)) {
+        const k = r.name.toLowerCase();
+        const cur = counts.get(k) ?? { name: r.name, n: 0 };
+        cur.n += r.n;
+        counts.set(k, cur);
+      }
+    return json({
+      suggestions: [...counts.values()].sort((a, b) => b.n - a.n).map((x) => x.name),
+    });
+  }],
+
   [/^\/api\/journeys$/, "POST", async (req, _m, body) => {
     const { session: s, headers } = ensureSession(req);
     const name = String(body.name ?? "").trim();

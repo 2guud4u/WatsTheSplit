@@ -36,6 +36,7 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
   const [showCreate, setShowCreate] = useState(false);
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
+  const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showJourney, setShowJourney] = useState(false);
   const [jName, setJName] = useState("");
   const [jCur, setJCur] = useState("");
@@ -54,6 +55,11 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
       });
       location.hash = `#/j/${r.token}`;
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+  };
+
+  const openCreateModal = () => {
+    setShowCreate(true);
+    api.get("/api/member-suggestions").then((r) => setSuggestions(r.suggestions)).catch(() => {});
   };
   const currencies = config?.currencies ?? [];
 
@@ -97,7 +103,7 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
         </div>
       </div>
 
-      <button className="primary" onClick={() => setShowCreate(true)}>Create a trip</button>
+      <button className="primary" onClick={openCreateModal}>Create a trip</button>
 
       <button onClick={openJourneyModal}>Create a journey</button>
 
@@ -173,6 +179,22 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
                   onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addMember(); } }} />
                 <button onClick={addMember} disabled={!memberInput.trim()}>Add</button>
               </div>
+              {(() => {
+                const q = memberInput.trim().toLowerCase();
+                const opts = suggestions.filter((s) =>
+                  !members.some((m) => m.toLowerCase() === s.toLowerCase())
+                  && (!q || s.toLowerCase().includes(q)));
+                return opts.length > 0 && (
+                  <div className="pills">
+                    {opts.slice(0, 8).map((s) => (
+                      <button key={s} className="member-pill" style={{ cursor: "pointer" }}
+                        onClick={() => { setMembers([...members, s]); setMemberInput(""); }}>
+                        + {s}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
             <details className="more">
               <summary>Dates (optional){range?.from ? ` — ${range.from.toISOString().slice(0,10)}${range.to ? " → " + range.to.toISOString().slice(0,10) : " → …"}` : ""}</summary>
