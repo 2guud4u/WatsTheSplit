@@ -48,8 +48,9 @@ export function decimals(code: string): number {
   if (t.includes(code)) return 3;
   return 2;
 }
+// accepts thousands separators: "1,234.56" -> 123456
 export const toMinor = (v: string, code: string) =>
-  Math.round(parseFloat(v || "0") * 10 ** decimals(code));
+  Math.round(parseFloat(v.replace(/,/g, "") || "0") * 10 ** decimals(code));
 export const fmt = (minor: number, code: string) =>
   (minor / 10 ** decimals(code)).toFixed(decimals(code)) + " " + code;
 export const fmtUnits = (units: number, code: string) =>

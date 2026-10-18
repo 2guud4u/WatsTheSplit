@@ -354,7 +354,7 @@ function MoneyField({ code, minor, onCommit }: { code: string; minor: number; on
   return (
     <input className="money" inputMode="decimal" value={v}
       onChange={(e) => setV(e.target.value)}
-      onBlur={() => onCommit(Math.round(parseFloat(v || "0") * 10 ** d))} />
+      onBlur={() => onCommit(toMinor(v, code))} />
   );
 }
 
