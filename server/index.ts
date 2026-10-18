@@ -1019,6 +1019,7 @@ const routes: Route[] = [
       })),
       persons: [...persons.entries()].map(([k, p]) => ({ key: k, ...p })),
       members: allM.map((mm) => ({ id: mm.id, name: mm.name, trip_name: mm.trip_name, key: keyOf(mm), linked: !!mm.user_sub, opted_out_fun: !!mm.opted_out_fun })),
+      mergeHints: hints,
       // member ids belonging to this session, so the client can tell
       // "who owes you" from "who you owe" inside shared transfers
       my_member_ids: allM.filter((mm) => (s.user_sub && mm.user_sub === s.user_sub) ||
