@@ -104,9 +104,10 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
         </div>
       </div>
 
-      <button className="primary" onClick={openCreateModal}>Create a trip</button>
-
-      <button onClick={openJourneyModal}>Create a journey</button>
+      <div className="row">
+        <button className="primary" onClick={openCreateModal}>Create a trip</button>
+        <button onClick={openJourneyModal}>Create a journey</button>
+      </div>
 
       {showJourney && (
         <div className="modal-bg" onClick={() => setShowJourney(false)}>
@@ -346,8 +347,7 @@ function App() {
   return (
     <>
       {mExp ? <ExpenseView key={mExp[2]} token={mExp[1]} expenseId={mExp[2]} />
-        : mJourney ? <JourneyView key={mJourney[1]} token={mJourney[1]} />
-        : mTrip ? <TripView key={mTrip[1]} token={mTrip[1]} config={config} me={me} reloadMe={reloadMe} />
+        : mJourney ? <JourneyView key={mJourney[1]} token={mJourney[1]} reloadMe={reloadMe} />
         : mTrip ? <TripView key={mTrip[1]} token={mTrip[1]} config={config} me={me} reloadMe={reloadMe} />
         : <Home config={config} me={me} reloadMe={reloadMe} />}
     </>

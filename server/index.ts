@@ -283,6 +283,19 @@ const routes: Route[] = [
     db.run("INSERT INTO users (email) VALUES (?) ON CONFLICT(email) DO NOTHING", [email]);
     const { session, headers } = ensureSession(req);
     db.run("UPDATE sessions SET user_sub = ? WHERE token = ?", [email, session.token]);
+    // Signing in locks the names this device already picked: each unlinked
+    // claimed Member becomes a Linked Member, unless the account already has
+    // a different Linked Member in that trip.
+    db.run(
+      `UPDATE members SET user_sub = ?
+       WHERE user_sub IS NULL
+         AND id IN (SELECT member_id FROM claims WHERE session_token = ?)
+         AND trip_token NOT IN (SELECT trip_token FROM members WHERE user_sub = ?)`,
+      [email, session.token, email],
+    );
+    for (const { trip_token } of db.query<{ trip_token: string }, [string]>(
+      "SELECT trip_token FROM claims WHERE session_token = ?",
+    ).all(session.token)) notify.trip(trip_token);
     return json({ ok: true }, { headers });
   }],
 
@@ -986,6 +999,7 @@ const routes: Route[] = [
     const { transfers } = journeyBalance(j);
     return json({
       journey: { token: j.token, name: j.name, settle_currency: j.settle_currency },
+      signed_in: !!s.user_sub,
       trips: trips.map((t) => ({
         token: t.token, name: t.name, settle_currency: t.settle_currency,
         access: hasAccess(s, t) ? "edit" : "view",
@@ -1089,6 +1103,34 @@ const routes: Route[] = [
       db.run("INSERT OR REPLACE INTO journey_merges (journey_token, member_id, group_id) VALUES (?,?,?)", [j.token, id, gid]);
     notify.journey(j.token);
     return json({ ok: true, group_id: gid });
+  }],
+
+  // journey settings: rename + dissolve. Dissolving a journey only removes
+  // the grouping — its trips are untouched.
+  [/^\/api\/journeys\/([A-Za-z0-9]+)\/settings$/, "PATCH", async (req, m, body) => {
+    const g = withJourney(req, m[1]);
+    if (g instanceof Response) return g;
+    const { j } = g;
+    const name = String(body.name ?? "").trim();
+    if (!name) return err(400, "bad_name");
+    db.run("UPDATE journeys SET name = ? WHERE token = ?", [name, j.token]);
+    notify.journey(j.token);
+    return json({ ok: true });
+  }],
+
+  [/^\/api\/journeys\/([A-Za-z0-9]+)$/, "DELETE", async (req, m, body) => {
+    const g = withJourney(req, m[1]);
+    if (g instanceof Response) return g;
+    const { j } = g;
+    if (String(body.name ?? "") !== j.name) return err(400, "name_mismatch");
+    const trips = journeyTrips(j);
+    db.run("DELETE FROM journey_merges WHERE journey_token = ?", [j.token]);
+    db.run("DELETE FROM journey_access WHERE journey_token = ?", [j.token]);
+    db.run("DELETE FROM journey_trips WHERE journey_token = ?", [j.token]);
+    db.run("DELETE FROM journeys WHERE token = ?", [j.token]);
+    notify.journey(j.token);
+    for (const t of trips) notify.trip(t.token);
+    return json({ ok: true });
   }],
 
   [/^\/api\/journeys\/([A-Za-z0-9]+)\/merge\/([A-Za-z0-9-]+)$/, "DELETE", async (req, m) => {

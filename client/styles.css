@@ -270,7 +270,8 @@ details.more > summary::before { content: "▸ "; }
 details.more[open] > summary::before { content: "▾ "; }
 
 /* ---------- misc ---------- */
-.qr img { width: 160px; height: 160px; border-radius: 8px; }
+.qr { margin-top: 10px; }
+.qr img { display: block; width: 160px; height: 160px; border-radius: 8px; }
 .field { margin: 8px 0; }
 label.field-label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 5px; letter-spacing: .02em; }
 details summary { cursor: pointer; padding: 8px 0; }

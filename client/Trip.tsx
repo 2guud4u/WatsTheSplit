@@ -1,5 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import qrcode from "qrcode-generator";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { api, BASE, Config, toMinor, fmt, fmtUnits, decimals, flag, CATEGORIES } from "./api.ts";
 import { addRecent } from "./main.tsx";
 import { CurrencyPicker } from "./CurrencyPicker.tsx";
@@ -8,7 +7,7 @@ import { SignInButton } from "./SignIn.tsx";
 import { RangePicker } from "./main.tsx";
 import type { DateRange } from "react-day-picker";
 import { useTripEvents } from "./hooks.ts";
-import { CopyButton } from "./CopyButton.tsx";
+import { ShareLink } from "./ShareLink.tsx";
 type Member = { id: string; name: string; linked: boolean; used: boolean; is_me: boolean; opted_out_fun?: boolean };
 type ExpenseSum = {
   id: string; name: string; currency: string; total_minor: number;
@@ -42,16 +41,6 @@ type TripData = {
   fx_timestamp: string | null;
   current_rate: { rate: number; providerTimestamp: string | null } | null;
 };
-
-function QR({ text }: { text: string }) {
-  const url = useMemo(() => {
-    const qr = qrcode(0, "M");
-    qr.addData(text);
-    qr.make();
-    return qr.createDataURL(8, 0);
-  }, [text]);
-  return <div className="qr"><img src={url} alt="Trip QR code" /></div>;
-}
 
 function MoneyInput({ code, value, onCommit, placeholder }: {
   code: string; value: string; placeholder?: string;
@@ -160,13 +149,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
       <h2 style={{ marginTop: 0 }}>Who are you?</h2>
       <p className="muted">
         Pick your name or add a new one{readOnly ? " — or just browse below" : ""}.{" "}
-        {!data.signed_in && !readOnly && (
-          <>Without signing in, <b>anyone with the trip link can pick your name later</b>.{" "}
-            <button className="link" onClick={() => {
-              const btn = document.getElementById("googbtn");
-              btn?.scrollIntoView();
-            }}>Sign in</button> to lock yours.</>
-        )}
+        {!data.signed_in && <>Without signing in, <b>anyone with the trip link can pick your name later</b>.</>}
       </p>
       <div className="row" style={{ marginBottom: 10 }}>
         {data.members.map((m) => (
@@ -185,9 +168,9 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
           setNewName(""); load();
         }}>Join as new</button>
       </div>
-      {!data.signed_in && !readOnly && (
+      {!data.signed_in && (
         <div style={{ marginTop: 14 }}>
-          <SignInButton onSignedIn={() => { reloadMe(); load(); }} />
+          <SignInButton label="Sign in to lock your name" onSignedIn={() => { reloadMe(); load(); }} />
         </div>
       )}
     </div>
@@ -253,16 +236,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
         {!readOnly && <button className="link" onClick={() => setShowSettings(!showSettings)}>Settings</button>}
       </div>
 
-      {showInvite && (
-        <div className="card">
-          <div className="row">
-            <input className="wide" readOnly value={inviteUrl} onFocus={(e) => e.target.select()} />
-            <CopyButton text={inviteUrl} />
-          </div>
-          <QR text={inviteUrl} />
-          <p className="muted">Anyone with this link can join — keep it private.</p>
-        </div>
-      )}
+      {showInvite && <ShareLink url={inviteUrl} note="Anyone with this link can join — keep it private." />}
 
       {showSettings && <Settings data={data} token={token} currencies={currencies} reload={load}
         setShow={setShowSettings} />}
