@@ -74,9 +74,14 @@ export function expensePayload(e: ExpenseRow, detail: boolean) {
     rate: e.rate, rate_provider: e.rate_provider, rate_timestamp: e.rate_timestamp,
     last_edited_by: e.last_edited_by, last_edited_at: e.last_edited_at,
     assigned_minor: assigned, unassigned_minor: unassigned, over: unassigned < 0,
-    paid_out: paidMembers(e.id).size > 0 && shares.every((s) => s.minor === null || paidMembers(e.id).has(s.member_id)),
-    paid_count: paidMembers(e.id).size,
-    share_count: shares.filter((s) => s.minor !== null).length,
+    // the payer fronted the money — "paid" only tracks the other participants
+    paid_out: (() => {
+      const paidSet = paidMembers(e.id);
+      return paidSet.size > 0 && shares.every((s) =>
+        s.member_id === e.payer_member_id || s.minor === null || paidSet.has(s.member_id));
+    })(),
+    paid_count: [...paidMembers(e.id)].filter((id) => id !== e.payer_member_id).length,
+    share_count: shares.filter((s) => s.minor !== null && s.member_id !== e.payer_member_id).length,
   };
   if (!detail) return base;
   base.participants = db.query<{ member_id: string; share_minor: number | null; name: string; paid: number }, [string]>(
