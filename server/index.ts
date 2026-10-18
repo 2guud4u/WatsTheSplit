@@ -4,7 +4,7 @@ import { crossRate, startFxLoop, latestProviderTimestamp } from "./fx.ts";
 import { seedDemo, DEMO_TOKEN } from "./demo.ts";
 import { effectiveShares, expensePayload, tripBalances, journeyBalance, journeyTrips, journeyPeople, paidMembers, type JourneyMember } from "./ledger.ts";
 import * as notify from "./notify.ts";
-import { funBoard } from "./wrapped.ts";
+import { funBoard, journeyBoard } from "./wrapped.ts";
 import type { Session, Member, Trip, Journey, ExpenseRow } from "./types.ts";
 
 const PORT = Number(process.env.PORT ?? 8081);
@@ -997,21 +997,28 @@ const routes: Route[] = [
         hints.push({ name: ms[0].name, member_ids: ms.map((mm) => mm.id), trips: [...new Set(ms.map((mm) => mm.trip_name!))] });
     }
     const { transfers } = journeyBalance(j);
+    // Trip Wrapped waits for trip end (or 5 days after creation with no end
+    // date); the journey unlocks at the latest of all its trips' dates.
+    const wrappedAt = trips.length
+      ? new Date(Math.max(...trips.map((t) => Date.parse(
+          t.end_date ? `${t.end_date}T23:59:59` : new Date(Date.parse(t.created_at) + 5 * 86400e3).toISOString())))).toISOString()
+      : null;
     return json({
-      journey: { token: j.token, name: j.name, settle_currency: j.settle_currency },
+      journey: { token: j.token, name: j.name, settle_currency: j.settle_currency, fun_leaderboard: !!j.fun_leaderboard },
       signed_in: !!s.user_sub,
+      wrapped_at: wrappedAt,
+      fun: j.fun_leaderboard ? journeyBoard(j) : null,
       trips: trips.map((t) => ({
         token: t.token, name: t.name, settle_currency: t.settle_currency,
         access: hasAccess(s, t) ? "edit" : "view",
         members: db.query<Member, [string]>("SELECT * FROM members WHERE trip_token = ? ORDER BY name")
-          .all(t.token).map((mm) => ({ id: mm.id, name: mm.name, linked: !!mm.user_sub })),
+          .all(t.token).map((mm) => ({ id: mm.id, name: mm.name, linked: !!mm.user_sub, opted_out_fun: !!mm.opted_out_fun })),
         expenses: db.query<ExpenseRow, [string]>(
           "SELECT * FROM expenses WHERE trip_token = ? ORDER BY recorded_at DESC",
         ).all(t.token).map((e) => expensePayload(e, false)),
       })),
       persons: [...persons.entries()].map(([k, p]) => ({ key: k, ...p })),
-      members: allM.map((mm) => ({ id: mm.id, name: mm.name, trip_name: mm.trip_name, key: keyOf(mm), linked: !!mm.user_sub })),
-      mergeHints: hints,
+      members: allM.map((mm) => ({ id: mm.id, name: mm.name, trip_name: mm.trip_name, key: keyOf(mm), linked: !!mm.user_sub, opted_out_fun: !!mm.opted_out_fun })),
       // member ids belonging to this session, so the client can tell
       // "who owes you" from "who you owe" inside shared transfers
       my_member_ids: allM.filter((mm) => (s.user_sub && mm.user_sub === s.user_sub) ||
@@ -1105,15 +1112,20 @@ const routes: Route[] = [
     return json({ ok: true, group_id: gid });
   }],
 
-  // journey settings: rename + dissolve. Dissolving a journey only removes
-  // the grouping — its trips are untouched.
+  // journey settings: rename + Journey Wrapped toggle. Dissolving a journey
+  // only removes the grouping — its trips are untouched.
   [/^\/api\/journeys\/([A-Za-z0-9]+)\/settings$/, "PATCH", async (req, m, body) => {
     const g = withJourney(req, m[1]);
     if (g instanceof Response) return g;
     const { j } = g;
-    const name = String(body.name ?? "").trim();
-    if (!name) return err(400, "bad_name");
-    db.run("UPDATE journeys SET name = ? WHERE token = ?", [name, j.token]);
+    if (body.name !== undefined) {
+      const name = String(body.name ?? "").trim();
+      if (!name) return err(400, "bad_name");
+      db.run("UPDATE journeys SET name = ? WHERE token = ?", [name, j.token]);
+    }
+    if (body.fun_leaderboard !== undefined) {
+      db.run("UPDATE journeys SET fun_leaderboard = ? WHERE token = ?", [body.fun_leaderboard ? 1 : 0, j.token]);
+    }
     notify.journey(j.token);
     return json({ ok: true });
   }],

@@ -197,7 +197,11 @@ CREATE TABLE IF NOT EXISTS journey_access (
   created_at    TEXT NOT NULL,
   PRIMARY KEY (session_token, journey_token)
 );
+
 `)
+if (!db.query("SELECT 1 FROM pragma_table_info('journeys') WHERE name='fun_leaderboard'").get()) {
+  db.exec("ALTER TABLE journeys ADD COLUMN fun_leaderboard INTEGER NOT NULL DEFAULT 0");
+}
 
 if (!db.query("SELECT 1 FROM pragma_table_info('expense_participants') WHERE name='paid'").get()) {
   db.exec("ALTER TABLE expense_participants ADD COLUMN paid INTEGER NOT NULL DEFAULT 0");

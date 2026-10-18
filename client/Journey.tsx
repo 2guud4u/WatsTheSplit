@@ -5,6 +5,7 @@ import { ShareLink } from "./ShareLink.tsx";
 import { Avatar, OweCard } from "./OweCard.tsx";
 import { SignInButton } from "./SignIn.tsx";
 
+import { Awards } from "./Awards.tsx";
 type TripRef = { token: string; name: string; settle_currency?: string };
 type ExpenseSum = {
   id: string; name: string; currency: string; total_minor: number;
@@ -12,14 +13,16 @@ type ExpenseSum = {
 };
 type JTrip = TripRef & {
   access: "edit" | "view";
-  members: { id: string; name: string; linked: boolean }[];
+  members: { id: string; name: string; linked: boolean; opted_out_fun: boolean }[];
   expenses: ExpenseSum[];
 };
 type Person = { key: string; name: string; memberIds: string[]; linked: boolean };
-type JMember = { id: string; name: string; trip_name: string; key: string; linked: boolean };
+type JMember = { id: string; name: string; trip_name: string; key: string; linked: boolean; opted_out_fun: boolean };
 type JourneyData = {
-  journey: { token: string; name: string; settle_currency: string };
+  journey: { token: string; name: string; settle_currency: string; fun_leaderboard: boolean };
   signed_in: boolean;
+  wrapped_at: string | null;
+  fun: { awards: { emoji: string; title: string; members: string[]; detail: string }[] } | null;
   trips: JTrip[];
   persons: Person[];
   members: JMember[];
@@ -38,10 +41,12 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
   const [data, setData] = useState<JourneyData | null>(null);
   const [err, setErr] = useState("");
   const [addOpen, setAddOpen] = useState(false);
-  const [tab, setTab] = useState<"trips" | "owed" | "youowe" | "people">("trips");
+  const [tab, setTab] = useState<"trips" | "owed" | "youowe" | "people" | "fun">("trips");
   const [paying, setPaying] = useState<Transfer | null>(null);
   const [showInvite, setShowInvite] = useState(false);
- const [showSettings, setShowSettings] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [funBanner, setFunBanner] = useState(() =>
+    !localStorage.getItem(`wts_fun_notice_j${token}`));
 
   const load = useCallback(async () => {
     try { setData(await api.get(`/api/journeys/${token}`)); setErr(""); }
@@ -79,6 +84,9 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
   const j = data.journey;
   const cur = j.settle_currency;
   const link = `${location.origin}${BASE}/#/j/${j.token}`;
+  const wrappedLive = !!(j.fun_leaderboard && data.wrapped_at && Date.now() >= Date.parse(data.wrapped_at));
+  const myMembers = data.members.filter((m) => data.my_member_ids.includes(m.id));
+  const allHidden = myMembers.length > 0 && myMembers.every((m) => m.opted_out_fun);
 
   const merge = async (ids: string[]) => {
     try { await api.post(`/api/journeys/${j.token}/merge`, { member_ids: ids }); load(); }
@@ -137,12 +145,39 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
 
       {showSettings && <JourneySettings data={data} load={load} setShow={setShowSettings} />}
 
+      {wrappedLive && funBanner && (
+        <div className="card fun-notice">
+          <p className="muted" style={{ margin: 0 }}>
+            🎁 <b>Journey Wrapped</b> is on — silly awards computed across all {data.trips.length} trips in this journey.
+          </p>
+          <div className="row" style={{ marginTop: 8, justifyContent: "flex-end" }}>
+            {allHidden
+              ? <span className="pill">you're hidden from awards</span>
+              : <button className="link" onClick={async () => {
+                  // one click hides the viewer everywhere: every claimed member
+                  for (const m of myMembers)
+                    await api.patch(`/api/members/${m.id}`, { opted_out_fun: true });
+                  load();
+                }}>hide me from awards</button>}
+            <button className="link" onClick={() => {
+              localStorage.setItem(`wts_fun_notice_j${token}`, "1");
+              setFunBanner(false);
+            }}>dismiss</button>
+          </div>
+        </div>
+      )}
+
       <div className="tabs">
         <button className={tab === "trips" ? "active" : ""} onClick={() => setTab("trips")}>Trips</button>
         <button className={tab === "owed" ? "active" : ""} onClick={() => setTab("owed")}>Who owes you</button>
         <button className={tab === "youowe" ? "active" : ""} onClick={() => setTab("youowe")}>Who you owe</button>
         <button className={tab === "people" ? "active" : ""} onClick={() => setTab("people")}>People</button>
+        {wrappedLive && (
+          <button className={tab === "fun" ? "active" : ""} onClick={() => setTab("fun")}>🎁 Journey Wrapped</button>
+        )}
       </div>
+
+      {tab === "fun" && <Awards title="Journey Wrapped" awards={data.fun?.awards ?? null} />}
 
       {tab === "trips" && (
         <>
@@ -379,6 +414,17 @@ function JourneySettings({ data, load, setShow }: {
         <label className="field-label">Settlement currency</label>
         <div className="locked-field">{flag(j.settle_currency)} {j.settle_currency}</div>
         <p className="muted">Shared by every trip in the journey</p>
+      </div>
+      <div className="field">
+        <label className="field-label">🎁 Journey Wrapped</label>
+        <label className="member-chip" style={{ cursor: "pointer" }}>
+          <input type="checkbox" checked={j.fun_leaderboard} onChange={async (e) => {
+            await api.patch(`/api/journeys/${j.token}/settings`, { fun_leaderboard: e.target.checked });
+            load();
+          }} />
+          Show the Journey Wrapped tab with silly awards
+        </label>
+        <p className="muted">Awards unlock after the last trip ends.</p>
       </div>
       <div className="field">
         <label className="field-label error">Danger zone</label>

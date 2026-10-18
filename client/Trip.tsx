@@ -8,6 +8,7 @@ import { RangePicker } from "./main.tsx";
 import type { DateRange } from "react-day-picker";
 import { useTripEvents } from "./hooks.ts";
 import { ShareLink } from "./ShareLink.tsx";
+import { Awards } from "./Awards.tsx";
 type Member = { id: string; name: string; linked: boolean; used: boolean; is_me: boolean; opted_out_fun?: boolean };
 type ExpenseSum = {
   id: string; name: string; currency: string; total_minor: number;
@@ -437,39 +438,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
         );
       })()}
 
-      {tab === "fun" && (
-        <div className="card">
-          <h2 style={{ marginTop: 0 }}>🎁 Trip Wrapped</h2>
-          {(!data.fun || data.fun.awards.length === 0) && (
-            <p className="muted">No awards yet — add expenses and let the data speak.</p>
-          )}
-          {data.fun && data.fun.awards.length > 0 && (
-            <>
-              {(() => {
-                const first = data.fun.awards[0];
-                return (
-                  <div className="award-hero">
-                    <div className="award-emoji">{first.emoji}</div>
-                    <div className="award-title">{first.title}</div>
-                    <div className="award-members">{first.members.join(" + ")}</div>
-                    <div className="muted">{first.detail}</div>
-                  </div>
-                );
-              })()}
-              <div className="award-grid">
-                {data.fun.awards.slice(1).map((a) => (
-                  <div key={a.title} className="award-card">
-                    <div className="award-emoji">{a.emoji}</div>
-                    <div className="award-title">{a.title}</div>
-                    <div className="award-members">{a.members.join(" + ") || "the whole squad"}</div>
-                    <div className="muted">{a.detail}</div>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      )}
+      {tab === "fun" && <Awards title="Trip Wrapped" awards={data.fun?.awards ?? null} />}
 
       {tab === "expenses" && (
       <>
