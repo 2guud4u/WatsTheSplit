@@ -120,6 +120,21 @@ a:hover { text-decoration: underline; }
   padding: 16px;
   margin-bottom: 12px;
 }
+
+/* collapsible card (expense page): <details class="card"><summary>… */
+details.card { padding: 0; }
+details.card > summary {
+  list-style: none; cursor: pointer;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; font-size: 18px; font-weight: 700;
+}
+details.card > summary::-webkit-details-marker { display: none; }
+details.card > summary::after {
+  content: "›"; color: var(--muted); font-weight: 400;
+  transition: transform .15s;
+}
+details.card[open] > summary::after { transform: rotate(90deg); }
+details.card > .card-body { padding: 0 16px 14px; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
 .list-row {

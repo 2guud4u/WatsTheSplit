@@ -123,7 +123,9 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
       </div>
 
       <fieldset className="plain-fieldset" disabled={readOnly}>
-      <div className="card">
+      <details className="card">
+        <summary>Details</summary>
+        <div className="card-body">
         <div className="row">
           <div className="field" style={{ flex: 1 }}>
             <label className="field-label">Name</label>
@@ -153,10 +155,12 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
           Rate locked at creation: {e.currency === t.settle_currency ? `1 ${e.currency} = 1 ${t.settle_currency}` : e.rate ? `1 ${e.currency} = ${e.rate} ${t.settle_currency}` : "unavailable"}
           {e.rate_timestamp && ` · rate as of ${new Date(e.rate_timestamp).toLocaleString()}`}
         </p>
-      </div>
+        </div>
+      </details>
 
-      <div className="card">
-        <h2 style={{ marginTop: 0 }}>Who's in</h2>
+      <details className="card">
+        <summary>Who's in · {partIds.size} of {data.members.length}</summary>
+        <div className="card-body">
         <div className="row">
           {data.members.map((m) => (
             <label key={m.id} className="member-chip" style={{ cursor: "pointer" }}>
@@ -169,11 +173,13 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
             </label>
           ))}
         </div>
-      </div>
+        </div>
+      </details>
 
-      <div className="card">
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <h2 style={{ margin: 0 }}>Split</h2>
+      <details className="card" open>
+        <summary>Split</summary>
+        <div className="card-body">
+        <div className="row" style={{ justifyContent: "flex-end" }}>
           <div className="split-side">
             <Pie slices={slices} total={e.total_minor} />
             <PieLegend slices={slices} unassigned={Math.max(0, e.unassigned_minor)} currency={e.currency} members={data.members} />
@@ -295,11 +301,13 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
             </label>
           ))}
         </div>
-      </div>
+        </div>
+      </details>
 
-      <div className="card">
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <h2 style={{ margin: 0 }}>Photos</h2>
+      <details className="card">
+        <summary>Photos{(e.photos ?? []).length > 0 ? ` · ${(e.photos ?? []).length}` : ""}</summary>
+        <div className="card-body">
+        <div className="row" style={{ justifyContent: "flex-end" }}>
           <label className="photo-add">
             + photo
             <input type="file" accept="image/*" hidden
@@ -324,7 +332,8 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
             </div>
           ))}
         </div>
-      </div>
+        </div>
+      </details>
       </fieldset>
 
       {data.access === "edit" && (
