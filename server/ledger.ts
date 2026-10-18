@@ -117,8 +117,10 @@ export function tripBalances(t: Trip) {
     if (e.paid_out) continue; // payer marked it reimbursed — shares count for nothing
     const rate = e.currency === t.settle_currency ? 1 : e.rate;
     if (rate === null) continue;
+    const paidSet = paidMembers(e.id);
     for (const s of effectiveShares(e)) {
       if (s.minor === null || s.member_id === e.payer_member_id) continue;
+      if (paidSet.has(s.member_id)) continue; // participant marked their share paid
       const units = (s.minor / 10 ** decimals(e.currency)) * rate;
       const key = `${s.member_id}>${e.payer_member_id}`;
       owed[key] = (owed[key] ?? 0) + units;
