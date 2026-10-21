@@ -186,7 +186,7 @@ r = await dave.get(T);
 check("dave sees trip after password", r.data.trip.name === "Japan");
 check("trip payload exposes password for invite link", r.data.trip.password === "nabe");
 r = await alice.patch(`${T}/settings`, { password: "" });
-check("password removal rejected", r.status === 400);
+check("password removal rejected", r.status === 400 && r.data.error === "password_empty");
 await alice.patch(`${T}/settings`, { password: "sushi" });
 
 

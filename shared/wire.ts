@@ -8,7 +8,7 @@ export type ErrorCode =
   | "bad_email" | "too_many_codes" | "send_failed"
   | "no_code" | "code_expired" | "too_many_attempts" | "wrong_code"
   // access gates (access.ts) — 401 password_required, 403 no_access
-  | "password_required" | "wrong_password" | "no_access" | "no_trip_access"
+  | "password_required" | "password_empty" | "wrong_password" | "no_access" | "no_trip_access"
   | "only_creator" | "member_linked" | "not_your_member" | "payer_only"
   | "payer_or_self_only" | "already_linked_other_member"
   // validation

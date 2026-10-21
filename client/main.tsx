@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { createRoot } from "react-dom/client";
-import { api, Config } from "./api.ts";
+import { api, Config, isApiError, describeError } from "./api.ts";
 import { flag } from "./format.ts";
 import TripView from "./Trip.tsx";
 import ExpenseView from "./Expense.tsx";
@@ -12,6 +12,16 @@ import { SignInButton } from "./SignIn.tsx";
 import JourneyView from "./Journey.tsx";
 
 type Me = { user: { email: string; name: string | null } | null };
+
+// Mutations that fail without a local handler shouldn't die silently —
+// surface ApiErrors once, globally. Sites that intentionally swallow
+// (share-link probe, detail-view ping) .catch(() => {}) as before.
+addEventListener("unhandledrejection", (ev: PromiseRejectionEvent) => {
+  if (isApiError(ev.reason)) {
+    ev.preventDefault();
+    alert(describeError(ev.reason));
+  }
+});
 
 const route = () => location.hash.slice(1).split("?")[0] || "/";
 

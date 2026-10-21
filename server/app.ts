@@ -243,7 +243,7 @@ const routes: Route[] = [
     const t = g.trip;
     // hash outside the transaction: db.transaction is synchronous
     const pw = body.password !== undefined ? String(body.password) : null;
-    if (pw !== null && pw === "") return err(400, "password_required");
+    if (pw !== null && pw === "") return err(400, "password_empty");
     const pwHash = pw !== null ? await Bun.password.hash(pw) : null;
     return mutateTrip(t.token, () => {
       if (body.name !== undefined) db.run("UPDATE trips SET name = ? WHERE token = ?", [String(body.name), t.token]);

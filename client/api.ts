@@ -39,7 +39,7 @@ const COPY: Partial<Record<ErrorCode | "network" | "bad_response", string>> = {
   too_many_attempts: "Too many tries — send a new code",
   wrong_code: "Wrong code — check the email",
   password_required: "This trip is locked — enter its password",
-  wrong_password: "Wrong password",
+  password_empty: "Trips must keep a password",
   no_access: "You don't have access to this journey",
   name_taken: "Name taken — pick another",
   member_linked: "That member is linked to another account",
@@ -104,7 +104,7 @@ interface Routes {
   "GET /api/trips/:trip":            R<{}, TripView, TripGate>;
   "DELETE /api/trips/:trip":         R<{ name: string }, Ok, TripGate | "name_mismatch">;
   "POST /api/trips/:trip/password":  R<{ password: string }, Ok, "trip_not_found" | "wrong_password">;
-  "PATCH /api/trips/:trip/settings": R<TripSettingsPatch, Ok, TripGate | "currencies_locked" | "only_creator">;
+  "PATCH /api/trips/:trip/settings": R<TripSettingsPatch, Ok, TripGate | "currencies_locked" | "only_creator" | "password_empty">;
   "POST /api/trips/:trip/claim":     R<ClaimInput, { ok: true; member_id: string },
                                        TripGate | "member_not_found" | "member_linked" | "name_taken" | "already_linked_other_member" | "member_or_name_required">;
   "POST /api/trips/:trip/members":   R<{ name: string }, { id: string }, TripGate | "name_required" | "name_taken">;
