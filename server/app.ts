@@ -1,7 +1,7 @@
 import { db, stmt } from "./db.ts";
 import { decimals, isCurrency, CURRENCIES } from "./currencies.ts";
 import { crossRate, latestProviderTimestamp } from "./fx.ts";
-import { effectiveShares, expensePayload, tripBalances, journeyBalance, journeyTrips, journeyPeople, type JourneyMember } from "./ledger.ts";
+import { effectiveShares, expensePayload, tripBalances, journeyBalance, journeyTrips, journeyPeople, loadTripRows, loadJourneyRows, type JourneyMember } from "./ledger.ts";
 import * as notify from "./notify.ts";
 import { funBoard, journeyBoard } from "./wrapped.ts";
 import { createAuth, type Mailer } from "./auth.ts";
@@ -186,7 +186,8 @@ const routes: Route[] = [
     if (o instanceof Response) return o;
     const t = o.trip;
     const me = o.me;
-    const { members, pairs, log } = tripBalances(t);
+    const rows = loadTripRows(t);
+    const { members, pairs, log } = tripBalances(rows);
     return json({
       trip: {
         token: t.token, name: t.name, start_date: t.start_date, end_date: t.end_date,
@@ -214,15 +215,11 @@ const routes: Route[] = [
       no_rate_count: db.query<{ n: number }, [string]>(
         "SELECT COUNT(*) n FROM expenses WHERE trip_token = ? AND rate IS NULL",
       ).get(t.token)!.n,
-      unfinished_count: db.query<ExpenseRow, [string]>(
-        "SELECT * FROM expenses WHERE trip_token = ?",
-      ).all(t.token).filter((e) => {
-        const assigned = effectiveShares(e).reduce((a, s) => a + (s.minor ?? 0), 0);
+      unfinished_count: rows.expenses.filter((e) => {
+        const assigned = effectiveShares(rows, e).reduce((a, s) => a + (s.minor ?? 0), 0);
         return e.total_minor - assigned > 0.5;
       }).length,
-      expenses: db.query<ExpenseRow, [string]>(
-        "SELECT * FROM expenses WHERE trip_token = ? ORDER BY recorded_at DESC",
-      ).all(t.token).map((e) => expensePayload(e, false)),
+      expenses: rows.expenses.map((e) => expensePayload(rows, e, false)),
       settlements: db.query<{ id: string; from_member: string; to_member: string; amount_minor: number; created_at: string; created_by: string | null }, [string]>(
         "SELECT * FROM settlements WHERE trip_token = ? ORDER BY created_at DESC",
       ).all(t.token),
@@ -231,7 +228,7 @@ const routes: Route[] = [
       current_rate: t.trip_currency === t.settle_currency
         ? { rate: 1, providerTimestamp: null }
         : crossRate(t.trip_currency, t.settle_currency),
-      fun: t.fun_leaderboard ? funBoard(t) : null,
+      fun: t.fun_leaderboard ? funBoard(rows) : null,
     });
   }],
 
@@ -422,7 +419,7 @@ const routes: Route[] = [
       "SELECT * FROM members WHERE trip_token = ? ORDER BY name",
     ).all(t.token);
     return json({
-      expense: expensePayload(e, true),
+      expense: expensePayload(loadTripRows(t), e, true),
       trip: { token: t.token, name: t.name, settle_currency: t.settle_currency },
       access: o.edit ? "edit" : "view",
       members: members.map((mm) => ({ id: mm.id, name: mm.name })),
@@ -550,10 +547,7 @@ const routes: Route[] = [
     if (g instanceof Response) return g;
     const { trip: t, me } = g;
     const type = String(body.type);
-    const parts = db.query<{ member_id: string; share_minor: number | null }, [string]>(
-      "SELECT member_id, share_minor FROM expense_participants WHERE expense_id = ?",
-    ).all(e.id);
-    const eff = effectiveShares(e);
+    const eff = effectiveShares(loadTripRows(t), e);
     const assignedEff = eff.reduce((a, s) => a + (s.minor ?? 0), 0);
     const rest = e.total_minor - assignedEff;
     if (type === "equal_rest") {
@@ -769,13 +763,12 @@ const routes: Route[] = [
     const gj = resolveJourney(s, m[1]);
     if (gj instanceof Response) return gj;
     const j = gj.j;
-    const trips = journeyTrips(j);
+    const jr = loadJourneyRows(j);
+    const trips = jr.trips;
     // merge hints: same name across different trips, not already one person
-    const { persons, keyOf } = journeyPeople(j);
+    const { persons, keyOf } = journeyPeople(jr);
     const hints: { name: string; member_ids: string[]; trips: string[] }[] = [];
-    const allM = trips.flatMap((t) =>
-      db.query<Member, [string]>("SELECT * FROM members WHERE trip_token = ? ORDER BY name")
-        .all(t.token).map((mm) => ({ ...mm, trip_name: t.name })));
+    const allM = trips.flatMap((tr) => tr.members.map((mm) => ({ ...mm, trip_name: tr.trip.name })));
     const byName = new Map<string, JourneyMember[]>();
     for (const mm of allM) {
       const k = mm.name.toLowerCase();
@@ -786,26 +779,23 @@ const routes: Route[] = [
       if (keys.size > 1)
         hints.push({ name: ms[0].name, member_ids: ms.map((mm) => mm.id), trips: [...new Set(ms.map((mm) => mm.trip_name!))] });
     }
-    const { transfers } = journeyBalance(j);
+    const { transfers } = journeyBalance(jr);
     // Trip Wrapped waits for trip end (or 5 days after creation with no end
     // date); the journey unlocks at the latest of all its trips' dates.
     const wrappedAt = trips.length
-      ? new Date(Math.max(...trips.map((t) => Date.parse(
-          t.end_date ? `${t.end_date}T23:59:59` : new Date(Date.parse(t.created_at) + 5 * 86400e3).toISOString())))).toISOString()
+      ? new Date(Math.max(...trips.map((tr) => Date.parse(
+          tr.trip.end_date ? `${tr.trip.end_date}T23:59:59` : new Date(Date.parse(tr.trip.created_at) + 5 * 86400e3).toISOString())))).toISOString()
       : null;
     return json({
       journey: { token: j.token, name: j.name, settle_currency: j.settle_currency, fun_leaderboard: !!j.fun_leaderboard },
       signed_in: !!s.user_sub,
       wrapped_at: wrappedAt,
-      fun: j.fun_leaderboard ? journeyBoard(j) : null,
-      trips: trips.map((t) => ({
-        token: t.token, name: t.name, settle_currency: t.settle_currency,
-        access: hasAccess(s, t) ? "edit" : "view",
-        members: db.query<Member, [string]>("SELECT * FROM members WHERE trip_token = ? ORDER BY name")
-          .all(t.token).map((mm) => ({ id: mm.id, name: mm.name, linked: !!mm.user_sub, opted_out_fun: !!mm.opted_out_fun })),
-        expenses: db.query<ExpenseRow, [string]>(
-          "SELECT * FROM expenses WHERE trip_token = ? ORDER BY recorded_at DESC",
-        ).all(t.token).map((e) => expensePayload(e, false)),
+      fun: j.fun_leaderboard ? journeyBoard(jr) : null,
+      trips: trips.map((tr) => ({
+        token: tr.trip.token, name: tr.trip.name, settle_currency: tr.trip.settle_currency,
+        access: hasAccess(s, tr.trip) ? "edit" : "view",
+        members: tr.members.map((mm) => ({ id: mm.id, name: mm.name, linked: !!mm.user_sub, opted_out_fun: !!mm.opted_out_fun })),
+        expenses: tr.expenses.map((e) => expensePayload(tr, e, false)),
       })),
       persons: [...persons.entries()].map(([k, p]) => ({ key: k, ...p })),
       members: allM.map((mm) => ({ id: mm.id, name: mm.name, trip_name: mm.trip_name, key: keyOf(mm), linked: !!mm.user_sub, opted_out_fun: !!mm.opted_out_fun })),

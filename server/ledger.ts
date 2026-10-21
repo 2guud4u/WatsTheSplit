@@ -2,16 +2,78 @@ import { db, stmt } from "./db.ts";
 import { decimals } from "./currencies.ts";
 import type { Trip, Journey, Member, ExpenseRow } from "./types.ts";
 
-// Lazy prepared statements — getDb() isn't open until openDb() runs.
-const qMember = { get: (id: string) => stmt<Member, [string]>("SELECT * FROM members WHERE id = ?").get(id) };
-const qTrip = { get: (t: string) => stmt<Trip, [string]>("SELECT * FROM trips WHERE token = ?").get(t) };
+// ---------- row loader ----------
+// One load per trip (or journey), then every computation below is pure:
+// rows in -> numbers/payloads out. Tests seed rows directly — no db needed
+// on the compute side, no N+1s on the read side.
 
-export function sharesForExpense(expenseId: string): { member_id: string; share_minor: number | null }[] {
-  return db.query<{ member_id: string; share_minor: number | null }, [string]>(
-    "SELECT member_id, share_minor FROM expense_participants WHERE expense_id = ?",
-  ).all(expenseId);
+export type ItemRow = { id: string; name: string; price_minor: number; sharers: string[] };
+export type PartRow = { member_id: string; share_minor: number | null; paid: number };
+export type SettleRow = { from_member: string; to_member: string; amount_minor: number };
+
+export type TripRows = {
+  trip: Trip;
+  members: Member[];
+  expenses: ExpenseRow[];
+  participants: Record<string, PartRow[]>;   // by expense_id
+  items: Record<string, ItemRow[]>;          // by expense_id
+  settlements: SettleRow[];
+  photos: Record<string, string[]>;          // expense_id -> photo ids
+};
+
+export function loadTripRows(t: Trip): TripRows {
+  const members = db.query<Member, [string]>(
+    "SELECT * FROM members WHERE trip_token = ? ORDER BY name",
+  ).all(t.token);
+  const expenses = db.query<ExpenseRow, [string]>(
+    "SELECT * FROM expenses WHERE trip_token = ? ORDER BY recorded_at DESC",
+  ).all(t.token);
+  const ids = expenses.map((e) => e.id);
+  const in_ = `(${ids.map(() => "?").join(",")})`;
+  const participants: TripRows["participants"] = {};
+  const items: TripRows["items"] = {};
+  const photos: TripRows["photos"] = {};
+  if (ids.length) {
+    for (const p of db.query<PartRow & { expense_id: string }, string[]>(
+      `SELECT expense_id, member_id, share_minor, paid FROM expense_participants WHERE expense_id IN ${in_}`,
+    ).all(...ids)) (participants[p.expense_id] ??= []).push(p);
+    const sharersByItem = new Map<string, string[]>();
+    for (const s of db.query<{ item_id: string; member_id: string }, string[]>(
+      `SELECT item_id, member_id FROM item_sharers WHERE item_id IN
+         (SELECT id FROM items WHERE expense_id IN ${in_})`,
+    ).all(...ids)) sharersByItem.set(s.item_id, [...(sharersByItem.get(s.item_id) ?? []), s.member_id]);
+    for (const i of db.query<{ id: string; expense_id: string; name: string; price_minor: number }, string[]>(
+      `SELECT id, expense_id, name, price_minor FROM items WHERE expense_id IN ${in_} ORDER BY rowid`,
+    ).all(...ids))
+      (items[i.expense_id] ??= []).push({ id: i.id, name: i.name, price_minor: i.price_minor, sharers: sharersByItem.get(i.id) ?? [] });
+    for (const p of db.query<{ id: string; expense_id: string }, string[]>(
+      `SELECT id, expense_id FROM expense_photos WHERE expense_id IN ${in_} ORDER BY created_at`,
+    ).all(...ids)) (photos[p.expense_id] ??= []).push(p.id);
+  }
+  const settlements = db.query<SettleRow, [string]>(
+    "SELECT from_member, to_member, amount_minor FROM settlements WHERE trip_token = ?",
+  ).all(t.token);
+  return { trip: t, members, expenses, participants, items, settlements, photos };
 }
 
+export type JourneyRows = { journey: Journey; trips: TripRows[]; merges: JourneyMerge[] };
+
+export function loadJourneyRows(j: Journey): JourneyRows {
+  const merges = db.query<JourneyMerge, [string]>(
+    "SELECT member_id, group_id FROM journey_merges WHERE journey_token = ?",
+  ).all(j.token);
+  return { journey: j, trips: journeyTrips(j).map(loadTripRows), merges };
+}
+
+// ---------- pure core ----------
+
+// The one Locked-Rate rule: an expense in the settle currency converts at 1.
+export const effectiveRate = (e: ExpenseRow, settleCurrency: string): number | null =>
+  e.currency === settleCurrency ? 1 : e.rate;
+
+const partsOf = (rows: TripRows, e: ExpenseRow): PartRow[] => rows.participants[e.id] ?? [];
+const paidSet = (rows: TripRows, e: ExpenseRow): Set<string> =>
+  new Set(partsOf(rows, e).filter((p) => p.paid).map((p) => p.member_id));
 
 // Per-participant effective share in expense minor units.
 // Hybrid: each member's share = typed share_minor + their portion of items
@@ -20,22 +82,15 @@ export function sharesForExpense(expenseId: string): { member_id: string; share_
 // shares - item prices, spread evenly over participants whose share_minor is
 // NULL. Rounding dust goes to the last remainder participant. Expenses with
 // no NULL participants can still be unassigned/over — shown as badges.
-export function effectiveShares(e: ExpenseRow): { member_id: string; minor: number | null }[] {
-  const itemRows = db.query<{ member_id: string; price_minor: number; n: number }, [string]>(
-    `SELECT s.member_id, i.price_minor, (SELECT COUNT(*) FROM item_sharers x WHERE x.item_id = i.id) AS n
-     FROM item_sharers s JOIN items i ON i.id = s.item_id WHERE i.expense_id = ?`,
-  ).all(e.id);
+export function effectiveShares(rows: TripRows, e: ExpenseRow): { member_id: string; minor: number | null }[] {
+  const itemRows = rows.items[e.id] ?? [];
   const itemByMember: Record<string, number> = {};
   let itemTotal = 0;
-  for (const r of itemRows) {
-    itemByMember[r.member_id] = (itemByMember[r.member_id] ?? 0) + r.price_minor / r.n;
+  for (const i of itemRows) {
+    itemTotal += i.price_minor;
+    for (const mid of i.sharers) itemByMember[mid] = (itemByMember[mid] ?? 0) + i.price_minor / i.sharers.length;
   }
-  itemTotal = db.query<{ t: number }, [string]>(
-    "SELECT COALESCE(SUM(price_minor),0) t FROM items WHERE expense_id = ?",
-  ).get(e.id)!.t;
-  const parts = db.query<{ member_id: string; share_minor: number | null; paid: number }, [string]>(
-    "SELECT member_id, share_minor, paid FROM expense_participants WHERE expense_id = ?",
-  ).all(e.id);
+  const parts = partsOf(rows, e);
   const ids = new Set(parts.map((p) => p.member_id));
   for (const id of Object.keys(itemByMember)) ids.add(id);
   const remIds = parts.filter((p) => p.share_minor === null).map((p) => p.member_id);
@@ -56,19 +111,12 @@ export function effectiveShares(e: ExpenseRow): { member_id: string; minor: numb
   });
 }
 
-// Set of participant member_ids whose share is marked paid.
-export function paidMembers(expenseId: string): Set<string> {
-  return new Set(db.query<{ member_id: string }, [string]>(
-    "SELECT member_id FROM expense_participants WHERE expense_id = ? AND paid = 1",
-  ).all(expenseId).map((r) => r.member_id));
-}
-
-
-
-export function expensePayload(e: ExpenseRow, detail: boolean) {
-  const shares = effectiveShares(e);
+export function expensePayload(rows: TripRows, e: ExpenseRow, detail: boolean) {
+  const shares = effectiveShares(rows, e);
+  const paid = paidSet(rows, e);
   const assigned = shares.reduce((a, s) => a + (s.minor ?? 0), 0);
   const unassigned = e.total_minor - assigned;
+  const nameOf = (id: string) => rows.members.find((m) => m.id === id)?.name ?? "?";
   const base: Record<string, unknown> = {
     id: e.id, name: e.name, currency: e.currency, total_minor: e.total_minor,
     payer_member_id: e.payer_member_id, category: e.category, recorded_at: e.recorded_at,
@@ -76,38 +124,21 @@ export function expensePayload(e: ExpenseRow, detail: boolean) {
     last_edited_by: e.last_edited_by, last_edited_at: e.last_edited_at,
     assigned_minor: assigned, unassigned_minor: unassigned, over: unassigned < 0,
     // the payer fronted the money — "paid" only tracks the other participants
-    paid_out: (() => {
-      const paidSet = paidMembers(e.id);
-      return paidSet.size > 0 && shares.every((s) =>
-        s.member_id === e.payer_member_id || s.minor === null || paidSet.has(s.member_id));
-    })(),
-    paid_count: [...paidMembers(e.id)].filter((id) => id !== e.payer_member_id).length,
+    paid_out: paid.size > 0 && shares.every((s) =>
+      s.member_id === e.payer_member_id || s.minor === null || paid.has(s.member_id)),
+    paid_count: [...paid].filter((id) => id !== e.payer_member_id).length,
     share_count: shares.filter((s) => s.minor !== null && s.member_id !== e.payer_member_id).length,
   };
   if (!detail) return base;
-  base.participants = db.query<{ member_id: string; share_minor: number | null; name: string; paid: number }, [string]>(
-    `SELECT p.member_id, p.share_minor, p.paid, m.name FROM expense_participants p
-     JOIN members m ON m.id = p.member_id WHERE p.expense_id = ?`,
-  ).all(e.id);
-  base.items = db.query<{ id: string; name: string; price_minor: number }, [string]>(
-    "SELECT id, name, price_minor FROM items WHERE expense_id = ? ORDER BY rowid",
-  ).all(e.id).map((i) => ({
-    ...i,
-    sharers: db.query<{ member_id: string }, [string]>(
-      "SELECT member_id FROM item_sharers WHERE item_id = ?",
-    ).all(i.id).map((s) => s.member_id),
-  }));
+  base.participants = partsOf(rows, e).map((p) => ({ ...p, name: nameOf(p.member_id) }));
+  base.items = (rows.items[e.id] ?? []).map((i) => ({ id: i.id, name: i.name, price_minor: i.price_minor, sharers: i.sharers }));
   base.effective_shares = shares;
-  base.photos = db.query<{ id: string }, [string]>(
-    "SELECT id FROM expense_photos WHERE expense_id = ? ORDER BY created_at",
-  ).all(e.id).map((p) => p.id);
+  base.photos = rows.photos[e.id] ?? [];
   return base;
 }
 
-export function tripBalances(t: Trip) {
-  const members = db.query<Member, [string]>(
-    "SELECT * FROM members WHERE trip_token = ? ORDER BY name",
-  ).all(t.token);
+export function tripBalances(rows: TripRows) {
+  const { trip: t, members } = rows;
   const dec = decimals(t.settle_currency);
   const owed: Record<string, number> = {}; // "from>to" -> units of settle currency
   // per-pair contribution log for the "math" view
@@ -116,17 +147,14 @@ export function tripBalances(t: Trip) {
     label: string; share_minor?: number; currency?: string; rate?: number | null;
     converted?: number; amount_minor?: number;
   }[]> = {};
-  for (const e of db.query<ExpenseRow, [string]>(
-    "SELECT * FROM expenses WHERE trip_token = ?",
-  ).all(t.token)) {
+  for (const e of rows.expenses) {
     if (!e.payer_member_id) continue;
-    if (e.paid_out) continue; // payer marked it reimbursed — shares count for nothing
-    const rate = e.currency === t.settle_currency ? 1 : e.rate;
+    const rate = effectiveRate(e, t.settle_currency);
     if (rate === null) continue;
-    const paidSet = paidMembers(e.id);
-    for (const s of effectiveShares(e)) {
+    const paid = paidSet(rows, e);
+    for (const s of effectiveShares(rows, e)) {
       if (s.minor === null || s.member_id === e.payer_member_id) continue;
-      if (paidSet.has(s.member_id)) continue; // participant marked their share paid
+      if (paid.has(s.member_id)) continue; // participant marked their share paid
       const units = (s.minor / 10 ** decimals(e.currency)) * rate;
       const key = `${s.member_id}>${e.payer_member_id}`;
       owed[key] = (owed[key] ?? 0) + units;
@@ -136,9 +164,7 @@ export function tripBalances(t: Trip) {
       });
     }
   }
-  for (const s of db.query<{ from_member: string; to_member: string; amount_minor: number }, [string]>(
-    "SELECT from_member, to_member, amount_minor FROM settlements WHERE trip_token = ?",
-  ).all(t.token)) {
+  for (const s of rows.settlements) {
     const key = `${s.from_member}>${s.to_member}`;
     owed[key] = (owed[key] ?? 0) - s.amount_minor / 10 ** dec;
     (log[key] ??= []).push({
@@ -163,33 +189,25 @@ export function tripBalances(t: Trip) {
   return { members, pairs, log };
 }
 
-
 // ---------- journeys ----------
-// A Journey reads each member trip's per-person net position (in that trip's
-// settle currency), converts to the Journey Currency at the current rate,
-// sums per Person, then simplifies to minimal transfers.
-
 
 export function journeyTrips(j: Journey): Trip[] {
+  const qTrip = stmt<Trip, [string]>("SELECT * FROM trips WHERE token = ?");
   return db.query<{ trip_token: string }, [string]>(
     "SELECT trip_token FROM journey_trips WHERE journey_token = ?",
   ).all(j.token).map((r) => qTrip.get(r.trip_token)).filter((t): t is Trip => !!t);
 }
 
 export type JourneyMember = Member & { trip_name?: string };
+type JourneyMerge = { member_id: string; group_id: string };
 
 // Person key: linked members share their user_sub; manual merges share a
 // group_id; otherwise the member stands alone.
-export function journeyPeople(j: Journey): { persons: Map<string, { name: string; memberIds: string[]; linked: boolean }>; keyOf: (m: JourneyMember) => string } {
-  const merges = db.query<{ member_id: string; group_id: string }, [string]>(
-    "SELECT member_id, group_id FROM journey_merges WHERE journey_token = ?",
-  ).all(j.token);
-  const groupOf = new Map(merges.map((m) => [m.member_id, m.group_id]));
+export function journeyPeople(jr: JourneyRows): { persons: Map<string, { name: string; memberIds: string[]; linked: boolean }>; keyOf: (m: JourneyMember) => string } {
+  const groupOf = new Map(jr.merges.map((m) => [m.member_id, m.group_id]));
   const allMembers: JourneyMember[] = [];
-  for (const t of journeyTrips(j)) {
-    for (const m of db.query<Member, [string]>(
-      "SELECT * FROM members WHERE trip_token = ? ORDER BY name",
-    ).all(t.token)) allMembers.push({ ...m, trip_name: t.name });
+  for (const tr of jr.trips) {
+    for (const m of tr.members) allMembers.push({ ...m, trip_name: tr.trip.name });
   }
   const persons = new Map<string, { name: string; memberIds: string[]; linked: boolean }>();
   const keyOf = (m: JourneyMember) =>
@@ -214,13 +232,13 @@ export function journeyPeople(j: Journey): { persons: Map<string, { name: string
 // trip page shows), re-keyed by Person and summed across trips. No cross-person
 // simplification, so every card decomposes into real per-trip debts that can be
 // settled trip by trip. All trips share one Settlement Currency (enforced on add).
-export function journeyBalance(j: Journey) {
-  const { persons, keyOf } = journeyPeople(j);
-  const dec = decimals(j.settle_currency);
+export function journeyBalance(jr: JourneyRows) {
+  const { persons, keyOf } = journeyPeople(jr);
+  const dec = decimals(jr.journey.settle_currency);
   type Part = { trip_token: string; trip_name: string; from_member: string; to_member: string; from_key: string; amount: number };
   const pairs = new Map<string, { from_key: string; to_key: string; amount: number; parts: Part[] }>();
-  for (const t of journeyTrips(j)) {
-    const { members, pairs: tripPairs } = tripBalances(t);
+  for (const tr of jr.trips) {
+    const { members, pairs: tripPairs } = tripBalances(tr);
     const byId = new Map(members.map((m) => [m.id, m]));
     for (const p of tripPairs) {
       const a = byId.get(p.from), b = byId.get(p.to);
@@ -232,7 +250,7 @@ export function journeyBalance(j: Journey) {
       const key = `${fk}>${tk}`;
       const cur = pairs.get(key) ?? { from_key: fk, to_key: tk, amount: 0, parts: [] };
       cur.amount += amt;
-      cur.parts.push({ trip_token: t.token, trip_name: t.name, from_member: p.from, to_member: p.to, from_key: keyOf(a), amount: p.amount });
+      cur.parts.push({ trip_token: tr.trip.token, trip_name: tr.trip.name, from_member: p.from, to_member: p.to, from_key: keyOf(a), amount: p.amount });
       pairs.set(key, cur);
     }
   }
@@ -250,4 +268,3 @@ export function journeyBalance(j: Journey) {
   });
   return { transfers };
 }
-

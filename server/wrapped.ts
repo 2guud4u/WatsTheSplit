@@ -1,7 +1,6 @@
-import { db } from "./db.ts";
 import { decimals } from "./currencies.ts";
-import type { Trip, Member, ExpenseRow, Journey } from "./types.ts";
-import { effectiveShares, sharesForExpense, journeyTrips, journeyPeople } from "./ledger.ts";
+import type { Member } from "./types.ts";
+import { effectiveRate, effectiveShares, journeyPeople, type TripRows, type JourneyRows, type JourneyMember } from "./ledger.ts";
 
 // Wrapped: silly awards computed from expense data, in settle-currency units.
 // Stats are collected per trip keyed by member id; awards are then built over
@@ -42,20 +41,16 @@ function emptyStats(): TripStats {
 
 const add = (rec: Record<string, number>, k: string, v: number) => { rec[k] = (rec[k] ?? 0) + v; };
 
-function collectStats(t: Trip): TripStats {
-  const members = db.query<Member, [string]>(
-    "SELECT * FROM members WHERE trip_token = ?",
-  ).all(t.token);
+function collectStats(rows: TripRows): TripStats {
+  const { trip: t, members } = rows;
   const out = new Set(members.filter((m) => m.opted_out_fun).map((m) => m.id));
   const dec = decimals(t.settle_currency);
   const st = emptyStats();
 
-  for (const e of db.query<ExpenseRow, [string]>(
-    "SELECT * FROM expenses WHERE trip_token = ?",
-  ).all(t.token)) {
+  for (const e of rows.expenses) {
     if (e.created_by_member_id && !out.has(e.created_by_member_id))
       add(st.createdCount, e.created_by_member_id, 1);
-    const rate = e.currency === t.settle_currency ? 1 : e.rate;
+    const rate = effectiveRate(e, t.settle_currency);
     if (rate === null) continue;
     const totalUnits = (e.total_minor / 10 ** decimals(e.currency)) * rate;
     if (e.payer_member_id && !out.has(e.payer_member_id)) {
@@ -64,7 +59,7 @@ function collectStats(t: Trip): TripStats {
       st.paidTrip.add(e.payer_member_id);
       (st.currencies[e.payer_member_id] ??= new Set()).add(e.currency);
     }
-    const sharers = effectiveShares(e).filter((s) => (s.minor ?? 0) > 0);
+    const sharers = effectiveShares(rows, e).filter((s) => (s.minor ?? 0) > 0);
     const sharerIds = sharers.map((s) => s.member_id);
     if (e.payer_member_id && sharerIds.some((id) => id !== e.payer_member_id))
       st.coveredTrip.add(e.payer_member_id);
@@ -85,7 +80,7 @@ function collectStats(t: Trip): TripStats {
     }
     if (!st.biggestExp || totalUnits > st.biggestExp.units)
       st.biggestExp = { units: totalUnits, sharers: sharerIds.filter((id) => !out.has(id)) };
-    for (const p of sharesForExpense(e.id))
+    for (const p of rows.participants[e.id] ?? [])
       if (p.share_minor !== null && !out.has(p.member_id))
         add(st.typedCount, p.member_id, 1);
     const ids = sharerIds.filter((id) => !out.has(id)).sort();
@@ -95,9 +90,7 @@ function collectStats(t: Trip): TripStats {
         add(st.tripleShare, `${ids[i]}>${ids[j]}>${ids[l]}`, 1);
     }
   }
-  for (const s of db.query<{ from_member: string; to_member: string; amount_minor: number }, [string]>(
-    "SELECT from_member, to_member, amount_minor FROM settlements WHERE trip_token = ?",
-  ).all(t.token)) {
+  for (const s of rows.settlements) {
     if (out.has(s.from_member) || out.has(s.to_member)) continue;
     add(st.settlePair, [s.from_member, s.to_member].sort().join(">"), 1);
     add(st.owed, s.from_member, -s.amount_minor / 10 ** dec);
@@ -234,13 +227,11 @@ function buildAwards(entities: Entity[], st: TripStats, fmtU: (v: number) => str
   return awards;
 }
 
-export function funBoard(t: Trip) {
-  const members = db.query<Member, [string]>(
-    "SELECT * FROM members WHERE trip_token = ? ORDER BY name",
-  ).all(t.token);
+export function funBoard(rows: TripRows) {
+  const { trip: t, members } = rows;
   if (members.length === 0) return { awards: [] };
   const out = new Set(members.filter((m) => m.opted_out_fun).map((m) => m.id));
-  const st = collectStats(t);
+  const st = collectStats(rows);
   const dec = decimals(t.settle_currency);
   const fmtU = (v: number) => `${v.toFixed(dec)} ${t.settle_currency}`;
   const entities: Entity[] = members
@@ -250,16 +241,15 @@ export function funBoard(t: Trip) {
   return { awards: awards.map(({ score: _s, ...a }) => a) };
 }
 
-export function journeyBoard(j: Journey) {
-  const trips = journeyTrips(j);
+export function journeyBoard(jr: JourneyRows) {
+  const { journey: j, trips } = jr;
   if (trips.length === 0) return { awards: [] };
-  const { persons, keyOf } = journeyPeople(j);
+  const { persons, keyOf } = journeyPeople(jr);
   const memberById = new Map<string, Member>();
-  for (const t of trips)
-    for (const m of db.query<Member, [string]>("SELECT * FROM members WHERE trip_token = ?").all(t.token))
-      memberById.set(m.id, m);
+  for (const tr of trips)
+    for (const m of tr.members) memberById.set(m.id, m);
   const kOf = (id: string) => {
-    const m = memberById.get(id);
+    const m = memberById.get(id) as JourneyMember | undefined;
     return m ? keyOf(m) : id;
   };
   // a person is opted out if ANY of their member rows opted out
@@ -279,8 +269,8 @@ export function journeyBoard(j: Journey) {
   // count trips per person for Always Boarding / The Bank
   const tripPaid: Record<string, number> = {};
   const tripCovered: Record<string, number> = {};
-  for (const t of trips) {
-    const ts = collectStats(t);
+  for (const tr of trips) {
+    const ts = collectStats(tr);
     mergeInto(st, ts, kOf);
     for (const id of ts.paidTrip) { const k = kOf(id); tripPaid[k] = (tripPaid[k] ?? 0) + 1; }
     for (const id of ts.coveredTrip) { const k = kOf(id); tripCovered[k] = (tripCovered[k] ?? 0) + 1; }
