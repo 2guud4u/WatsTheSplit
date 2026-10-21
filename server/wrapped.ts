@@ -268,16 +268,24 @@ function top(rec: Record<string, number>, min = 0): { key: string; v: number } |
   return best;
 }
 
-// everyone gets an award before anyone gets two, then fill to cap 7 by score
-function pick(awards: Award[], eligibleCount: number): Award[] {
-  awards.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-  const covered = new Set<string>();
+// Board composition: reserve the best duo and best group award up front so a
+// data-rich trip can't be all solo majors. Then everyone gets an award before
+// anyone gets two; fill to cap 7 by score.
+export function pick(awards: Award[], eligibleCount: number): Award[] {
   const picked: Award[] = [];
   const rest: Award[] = [];
+  const reserved = new Set<Award>();
+  const sectionOf = (a: Award) => a.members.length === 2 ? "duo" : a.members.length !== 1 ? "group" : "solo";
+  for (const sec of ["duo", "group"] as const) {
+    const best = awards.find((a) => sectionOf(a) === sec && !reserved.has(a));
+    if (best) { reserved.add(best); picked.push(best); }
+  }
+  const covered = new Set<string>(picked.flatMap((a) => a.members));
   for (const a of awards) {
+    if (reserved.has(a)) continue;
     const fresh = a.members.filter((n) => !covered.has(n));
     if (fresh.length > 0 && covered.size < eligibleCount) {
-      picked.push(a);
+      if (picked.length < 7) picked.push(a);
       fresh.forEach((n) => covered.add(n));
     } else {
       rest.push(a);
