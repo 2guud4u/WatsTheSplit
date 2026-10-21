@@ -5,6 +5,11 @@ import { effectiveShares, expensePayload, tripBalances, journeyBalance, journeyT
 import * as notify from "./notify.ts";
 import { funBoard, journeyBoard } from "./wrapped.ts";
 import { createAuth, type Mailer } from "./auth.ts";
+import {
+  ensureSession, linkedMember, myMember, hasAccess, accessibleTrips,
+  journeyGrant, journeyAccess, grantConsent, revokeConsents, grantJourneyAccess,
+  resolveTrip, resolveJourney, type TripAccess,
+} from "./access.ts";
 import type { Session, Member, Trip, Journey, ExpenseRow } from "./types.ts";
 
 export type AppDeps = {
@@ -35,118 +40,10 @@ const qMember = { get: (id: string) => stmt<Member, [string]>("SELECT * FROM mem
 const qTrip = { get: (t: string) => stmt<Trip, [string]>("SELECT * FROM trips WHERE token = ?").get(t) };
 const qJourney = { get: (t: string) => stmt<Journey, [string]>("SELECT * FROM journeys WHERE token = ?").get(t) };
 const qSession = { get: (t: string) => stmt<Session, [string]>("SELECT token, user_sub FROM sessions WHERE token = ?").get(t) };
-const reqSessions = new WeakMap<Request, Session>();
-
-function sessionFrom(req: Request): Session | null {
-  const cached = reqSessions.get(req);
-  if (cached) return cached;
-  const m = /(?:^|;\s*)wts_session=([^;]+)/.exec(req.headers.get("cookie") ?? "");
-  if (!m) return null;
-  return qSession.get(decodeURIComponent(m[1])) ?? null;
-}
-
-function ensureSession(req: Request): { session: Session; headers: HeadersInit } {
-  const s = sessionFrom(req);
-  if (s) return { session: s, headers: {} };
-  const token = crypto.randomUUID();
-  db.run("INSERT INTO sessions (token, user_sub, created_at) VALUES (?, NULL, ?)", [
-    token, now(),
-  ]);
-  const session = { token, user_sub: null };
-  reqSessions.set(req, session);
-  return {
-    session,
-    headers: { "set-cookie": `${COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000` },
-  };
-}
-
-const linkedMember = (s: Session, tripToken: string) =>
-  s.user_sub
-    ? db.query<Member, [string, string]>(
-        "SELECT * FROM members WHERE trip_token = ? AND user_sub = ?",
-      ).get(tripToken, s.user_sub) ?? null
-    : null;
-
-function myMember(s: Session, trip: Trip): Member | null {
-  const l = linkedMember(s, trip.token);
-  if (l) return l;
-  const claim = db.query<{ member_id: string }, [string, string]>(
-    "SELECT member_id FROM claims WHERE session_token = ? AND trip_token = ?",
-  ).get(s.token, trip.token);
-  return claim ? qMember.get(claim.member_id) ?? null : null;
-}
-
-// Password access: Linked members are exempt; others need consent at the
-// current password version.
-function hasAccess(s: Session, trip: Trip): boolean {
-  if (!trip.password_hash) return true;
-  if (linkedMember(s, trip.token)) return true;
-  const c = db.query<{ password_ver: number }, [string, string]>(
-    "SELECT password_ver FROM consents WHERE session_token = ? AND trip_token = ?",
-  ).get(s.token, trip.token);
-  return c?.password_ver === trip.password_ver;
-}
-
-
-// Trips the session may open (used for the journey trip-picker and access).
-function accessibleTrips(s: Session): Trip[] {
-  const consented = db.query<{ trip_token: string }, [string]>(
-    "SELECT trip_token FROM consents WHERE session_token = ?",
-  ).all(s.token).map((r) => r.trip_token);
-  const linked = s.user_sub
-    ? db.query<{ trip_token: string }, [string]>(
-        "SELECT trip_token FROM members WHERE user_sub = ?",
-      ).all(s.user_sub).map((r) => r.trip_token)
-    : [];
-  const tokens = [...new Set([...consented, ...linked])];
-  return tokens.map((t) => qTrip.get(t)).filter((t): t is Trip => !!t && hasAccess(s, t));
-}
-
-// Journey viewer: session opened a shared journey link (grant) or can already
-// open a member trip. Trip access implies journey access, not vice versa.
-function journeyGrant(s: Session, journeyToken: string): boolean {
-  return !!db.query("SELECT 1 FROM journey_access WHERE session_token = ? AND journey_token = ?")
-    .get(s.token, journeyToken);
-}
-function journeyAccess(s: Session, j: Journey): boolean {
-  return journeyGrant(s, j.token) || journeyTrips(j).some((t) => hasAccess(s, t));
-}
-
-// A journey link grants read access to all member trips; edit still needs
-// the trip's own password or a member claim (which grants edit access).
-function canViewTrip(s: Session, trip: Trip): boolean {
-  if (hasAccess(s, trip)) return true;
-  const jt = db.query<{ journey_token: string }, [string]>(
-    "SELECT journey_token FROM journey_trips WHERE trip_token = ?",
-  ).get(trip.token);
-  return !!jt && journeyGrant(s, jt.journey_token);
-}
-
-// Route guards: session -> entity -> access -> acting member.
-// Each returns the context, or a Response the route returns as-is.
-type TripCtx = { s: Session; t: Trip; me: Member | null };
-function withTrip(req: Request, token: string): TripCtx | Response {
-  const s = sessionFrom(req)!;
-  const o = openTrip(token, s);
-  if (o instanceof Response) return o;
-  return { s, t: o.trip, me: myMember(s, o.trip) };
-}
-type ExpenseCtx = TripCtx & { e: ExpenseRow };
-function withExpense(req: Request, id: string): ExpenseCtx | Response {
-  const s = sessionFrom(req)!;
-  const e = db.query<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(id);
-  if (!e) return err(404, "expense_not_found");
-  const o = openTrip(e.trip_token, s);
-  if (o instanceof Response) return o;
-  return { s, e, t: o.trip, me: myMember(s, o.trip) };
-}
-function withJourney(req: Request, token: string): { s: Session; j: Journey } | Response {
-  const s = sessionFrom(req)!;
-  const j = qJourney.get(token);
-  if (!j) return err(404, "journey_not_found");
-  if (!journeyAccess(s, j)) return err(403, "no_access");
-  return { s, j };
-}
+const qExpense = { get: (id: string) => stmt<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(id) };
+const qItem = { get: (id: string) => stmt<{ id: string; expense_id: string }, [string]>("SELECT id, expense_id FROM items WHERE id = ?").get(id) };
+const qPhoto = { get: (id: string) => stmt<{ id: string; expense_id: string; mime: string; data: Uint8Array }, [string]>("SELECT id, expense_id, mime, data FROM expense_photos WHERE id = ?").get(id) };
+const qSettlement = { get: (id: string) => stmt<{ id: string; trip_token: string }, [string]>("SELECT id, trip_token FROM settlements WHERE id = ?").get(id) };
 
 
 const memberIsUsed = (tripToken: string, memberId: string): boolean => {
@@ -163,10 +60,6 @@ const memberIsUsed = (tripToken: string, memberId: string): boolean => {
   );
 };
 
-// ---------- domain payload builders ----------
-
-// ---------- SSE ----------
-// ---------- helpers ----------
 function edited(e: { id: string }, memberName: string | null) {
   db.run("UPDATE expenses SET last_edited_by = ?, last_edited_at = ? WHERE id = ?", [
     memberName, now(), e.id,
@@ -182,23 +75,6 @@ function lockRate(eId: string, currency: string, settle: string): void {
 }
 
 
-type Ctx = { session: Session; trip: Trip; member: Member | null };
-
-function openTrip(token: string, s: Session): { trip: Trip } | Response {
-  const trip = qTrip.get(token);
-  if (!trip) return err(404, "trip_not_found");
-  if (!hasAccess(s, trip)) return err(401, "password_required", { protected: true });
-  return { trip };
-}
-
-// Read-only variant of openTrip: trip link members plus journey viewers.
-function openTripView(token: string, s: Session): { trip: Trip; edit: boolean } | Response {
-  const trip = qTrip.get(token);
-  if (!trip) return err(404, "trip_not_found");
-  if (hasAccess(s, trip)) return { trip, edit: true };
-  if (canViewTrip(s, trip)) return { trip, edit: false };
-  return err(401, "password_required", { protected: true });
-}
 
 // Case-insensitive name check within a trip.
 function nameTaken(tripToken: string, name: string, excludeId?: string): boolean {
@@ -208,15 +84,13 @@ function nameTaken(tripToken: string, name: string, excludeId?: string): boolean
 }
 // ---------- routes ----------
 type Body = Record<string, unknown>;
-type Route = [RegExp, string, (req: Request, m: RegExpMatchArray, body: Body) => Promise<Response> | Response];
+type Route = [RegExp, string, (req: Request, m: RegExpMatchArray, body: Body, s: Session) => Promise<Response> | Response];
 
 const routes: Route[] = [
   [/^\/api\/config$/, "GET", async () =>
     json({ baseUrl: BASE_URL, currencies: CURRENCIES })],
 
-  [/^\/api\/me$/, "GET", async (req) => {
-    const s = sessionFrom(req);
-    if (!s) return json({ user: null });
+  [/^\/api\/me$/, "GET", async (_req, _m, _body, s) => {
     const user = s.user_sub
       ? db.query("SELECT email, name FROM users WHERE email = ?").get(s.user_sub)
       : null;
@@ -232,7 +106,7 @@ const routes: Route[] = [
     return json({ ok: true });
   }],
 
-  [/^\/api\/auth\/email\/verify$/, "POST", async (req, _m, body) => {
+  [/^\/api\/auth\/email\/verify$/, "POST", async (_req, _m, body, s) => {
     const email = String(body.email ?? "").trim().toLowerCase();
     const r = await auth.checkCode(email, String(body.code ?? ""));
     if (r === "no_code") return err(400, "no_code");
@@ -240,8 +114,7 @@ const routes: Route[] = [
     if (r === "too_many_attempts") return err(429, "too_many_attempts");
     if (r === "wrong_code") return err(403, "wrong_code");
     db.run("INSERT INTO users (email) VALUES (?) ON CONFLICT(email) DO NOTHING", [email]);
-    const { session, headers } = ensureSession(req);
-    db.run("UPDATE sessions SET user_sub = ? WHERE token = ?", [email, session.token]);
+    db.run("UPDATE sessions SET user_sub = ? WHERE token = ?", [email, s.token]);
     // Signing in locks the names this device already picked: each unlinked
     // claimed Member becomes a Linked Member, unless the account already has
     // a different Linked Member in that trip.
@@ -250,23 +123,21 @@ const routes: Route[] = [
        WHERE user_sub IS NULL
          AND id IN (SELECT member_id FROM claims WHERE session_token = ?)
          AND trip_token NOT IN (SELECT trip_token FROM members WHERE user_sub = ?)`,
-      [email, session.token, email],
+      [email, s.token, email],
     );
     for (const { trip_token } of db.query<{ trip_token: string }, [string]>(
       "SELECT trip_token FROM claims WHERE session_token = ?",
-    ).all(session.token)) notify.trip(trip_token);
-    return json({ ok: true }, { headers });
-  }],
-
-  [/^\/api\/auth\/signout$/, "POST", async (req) => {
-    const s = sessionFrom(req);
-    if (s) db.run("UPDATE sessions SET user_sub = NULL WHERE token = ?", [s.token]);
+    ).all(s.token)) notify.trip(trip_token);
     return json({ ok: true });
   }],
 
-  [/^\/api\/my-trips$/, "GET", async (req) => {
-    const s = sessionFrom(req);
-    if (!s?.user_sub) return json({ trips: [] });
+  [/^\/api\/auth\/signout$/, "POST", async (_req, _m, _body, s) => {
+    db.run("UPDATE sessions SET user_sub = NULL WHERE token = ?", [s.token]);
+    return json({ ok: true });
+  }],
+
+  [/^\/api\/my-trips$/, "GET", async (_req, _m, _body, s) => {
+    if (!s.user_sub) return json({ trips: [] });
     return json({
       trips: db.query(
         `SELECT t.token, t.name, t.trip_currency, t.settle_currency FROM trips t
@@ -275,9 +146,9 @@ const routes: Route[] = [
     });
   }],
 
+
   // ---- trips ----
-  [/^\/api\/trips$/, "POST", async (req, _m, body) => {
-    const { session, headers } = ensureSession(req);
+  [/^\/api\/trips$/, "POST", async (_req, _m, body, s) => {
     const name = String(body.name ?? "").trim();
     if (!name) return err(400, "name_required");
     const tc = String(body.trip_currency ?? "").toUpperCase();
@@ -300,23 +171,21 @@ const routes: Route[] = [
       [token, name, body.start_date ? String(body.start_date) : null, body.end_date ? String(body.end_date) : null,
        tc, sc, await Bun.password.hash(pw), pw, now()],
     );
-    db.run("UPDATE trips SET created_by_token = ? WHERE token = ?", [session.token, token]);
-    // creator's session counts as having entered the password (ver starts at 0)
-    db.run("INSERT OR REPLACE INTO consents (session_token, trip_token, password_ver) VALUES (?,?,0)",
-      [session.token, token]);
+    db.run("UPDATE trips SET created_by_token = ? WHERE token = ?", [s.token, token]);
+    // creator's session counts as having entered the password
+    grantConsent(s, qTrip.get(token)!);
     for (const n of names) {
       db.run("INSERT INTO members (id, trip_token, name, user_sub, created_at) VALUES (?,?,?,NULL,?)",
         [crypto.randomUUID(), token, n, now()]);
     }
-    return json({ token, url: `${BASE_URL}/#/t/${token}` }, { headers });
+    return json({ token, url: `${BASE_URL}/#/t/${token}` });
   }],
 
-  [/^\/api\/trips\/([A-Za-z0-9]+)$/, "GET", async (req, m) => {
-    const s = sessionFrom(req) ?? { token: "", user_sub: null };
-    const o = openTripView(m[1], s);
+  [/^\/api\/trips\/([A-Za-z0-9]+)$/, "GET", async (_req, m, _body, s) => {
+    const o = resolveTrip(s, { trip: m[1] }, "view");
     if (o instanceof Response) return o;
     const t = o.trip;
-    const me = myMember(s, t);
+    const me = o.me;
     const { members, pairs, log } = tripBalances(t);
     return json({
       trip: {
@@ -366,25 +235,21 @@ const routes: Route[] = [
     });
   }],
 
-  [/^\/api\/trips\/([A-Za-z0-9]+)\/password$/, "POST", async (req, m, body) => {
-    // ensureSession (not sessionFrom): this can be the client's very first call
-    // when a ?pw= share link opens straight to a locked trip.
-    const { session: s, headers } = ensureSession(req);
+  [/^\/api\/trips\/([A-Za-z0-9]+)\/password$/, "POST", async (_req, m, body, s) => {
     const trip = qTrip.get(m[1]);
     if (!trip) return err(404, "trip_not_found");
     let ok = false;
     try { ok = await Bun.password.verify(String(body.password ?? ""), trip.password_hash ?? "$invalid$"); }
     catch { ok = false; }
     if (!ok) return err(403, "wrong_password");
-    db.run("INSERT OR REPLACE INTO consents (session_token, trip_token, password_ver) VALUES (?,?,?)",
-      [s.token, trip.token, trip.password_ver]);
-    return json({ ok: true }, { headers });
+    grantConsent(s, trip);
+    return json({ ok: true });
   }],
 
-  [/^\/api\/trips\/([A-Za-z0-9]+)\/settings$/, "PATCH", async (req, m, body) => {
-    const g = withTrip(req, m[1]);
+  [/^\/api\/trips\/([A-Za-z0-9]+)\/settings$/, "PATCH", async (_req, m, body, s) => {
+    const g = resolveTrip(s, { trip: m[1] }, "edit");
     if (g instanceof Response) return g;
-    const { s, t, me } = g;
+    const t = g.trip;
     if (body.name !== undefined) db.run("UPDATE trips SET name = ? WHERE token = ?", [String(body.name), t.token]);
     if (body.start_date !== undefined) db.run("UPDATE trips SET start_date = ? WHERE token = ?", [body.start_date === null ? null : String(body.start_date), t.token]);
     if (body.end_date !== undefined) db.run("UPDATE trips SET end_date = ? WHERE token = ?", [body.end_date === null ? null : String(body.end_date), t.token]);
@@ -405,22 +270,18 @@ const routes: Route[] = [
         db.run("UPDATE trips SET password_hash = ?, password_text = ?, password_ver = password_ver + 1 WHERE token = ?",
           [await Bun.password.hash(pw), pw, t.token]);
         // revoke all existing consents, then re-grant the acting session at the new version
-        db.run("DELETE FROM consents WHERE trip_token = ?", [t.token]);
-        const ver = db.query<{ password_ver: number }, [string]>(
-          "SELECT password_ver FROM trips WHERE token = ?",
-        ).get(t.token)!.password_ver;
-        db.run("INSERT OR REPLACE INTO consents (session_token, trip_token, password_ver) VALUES (?,?,?)",
-          [s.token, t.token, ver]);
+        revokeConsents(t);
+        grantConsent(s, qTrip.get(t.token)!);
       }
     }
     notify.trip(t.token);
     return json({ ok: true });
   }],
 
-  [/^\/api\/trips\/([A-Za-z0-9]+)$/, "DELETE", async (req, m, body) => {
-    const g = withTrip(req, m[1]);
+  [/^\/api\/trips\/([A-Za-z0-9]+)$/, "DELETE", async (_req, m, body, s) => {
+    const g = resolveTrip(s, { trip: m[1] }, "edit");
     if (g instanceof Response) return g;
-    const { s, t, me } = g;
+    const t = g.trip;
     if (body.name !== t.name) return err(400, "name_mismatch");
     db.run("DELETE FROM trips WHERE token = ?", [t.token]);
     notify.trip(t.token);
@@ -428,9 +289,8 @@ const routes: Route[] = [
   }],
 
   // ---- members ----
-  [/^\/api\/trips\/([A-Za-z0-9]+)\/claim$/, "POST", async (req, m, body) => {
-    const { session: s, headers } = ensureSession(req);
-    const o = openTripView(m[1], s);
+  [/^\/api\/trips\/([A-Za-z0-9]+)\/claim$/, "POST", async (_req, m, body, s) => {
+    const o = resolveTrip(s, { trip: m[1] }, "view");
     if (o instanceof Response) return o;
     const t = o.trip;
     const memberId = String(body.member_id ?? "");
@@ -461,15 +321,13 @@ const routes: Route[] = [
     db.run("INSERT OR REPLACE INTO claims (session_token, trip_token, member_id) VALUES (?,?,?)",
       [s.token, t.token, member.id]);
     // claiming grants edit access even for journey viewers (they never typed the password)
-    db.run("INSERT OR REPLACE INTO consents (session_token, trip_token, password_ver) VALUES (?,?,?)",
-      [s.token, t.token, t.password_ver]);
+    grantConsent(s, t);
     notify.trip(t.token);
-    return json({ ok: true, member_id: member.id }, { headers });
+    return json({ ok: true, member_id: member.id });
   }],
 
-  [/^\/api\/trips\/([A-Za-z0-9]+)\/members$/, "POST", async (req, m, body) => {
-    const s = sessionFrom(req)!;
-    const o = openTrip(m[1], s);
+  [/^\/api\/trips\/([A-Za-z0-9]+)\/members$/, "POST", async (_req, m, body, s) => {
+    const o = resolveTrip(s, { trip: m[1] }, "edit");
     if (o instanceof Response) return o;
     const name = String(body.name ?? "").trim();
     if (nameTaken(o.trip.token, name)) return err(409, "name_taken");
@@ -481,11 +339,10 @@ const routes: Route[] = [
     return json({ id });
   }],
 
-  [/^\/api\/members\/([A-Za-z0-9-]+)$/, "PATCH", async (req, m, body) => {
-    const s = sessionFrom(req)!;
+  [/^\/api\/members\/([A-Za-z0-9-]+)$/, "PATCH", async (_req, m, body, s) => {
     const mem = qMember.get(m[1]);
     if (!mem) return err(404, "member_not_found");
-    const o = openTrip(mem.trip_token, s);
+    const o = resolveTrip(s, { trip: mem.trip_token }, "edit");
     if (o instanceof Response) return o;
     if (body.name !== undefined) {
       const name = String(body.name).trim();
@@ -494,7 +351,7 @@ const routes: Route[] = [
       db.run("UPDATE members SET name = ? WHERE id = ?", [name, mem.id]);
     }
     if (body.opted_out_fun !== undefined) {
-      const me = myMember(s, o.trip);
+      const me = o.me;
       if (!me || me.id !== mem.id) return err(403, "not_your_member");
       db.run("UPDATE members SET opted_out_fun = ? WHERE id = ?", [body.opted_out_fun ? 1 : 0, mem.id]);
     }
@@ -502,14 +359,12 @@ const routes: Route[] = [
     return json({ ok: true });
   }],
 
-  [/^\/api\/members\/([A-Za-z0-9-]+)$/, "DELETE", async (req, m) => {
-    const s = sessionFrom(req)!;
-    const mem = qMember.get(m[1]);
-    if (!mem) return err(404, "member_not_found");
-    const o = openTrip(mem.trip_token, s);
+  [/^\/api\/members\/([A-Za-z0-9-]+)$/, "DELETE", async (_req, m, _body, s) => {
+    const o = resolveTrip(s, { member: m[1] }, "edit");
     if (o instanceof Response) return o;
+    const mem = qMember.get(m[1])!;
     if (memberIsUsed(mem.trip_token, mem.id)) return err(400, "member_in_use");
-    if (mem.id === myMember(s, o.trip)?.id) return err(400, "cannot_remove_self");
+    if (mem.id === o.me?.id) return err(400, "cannot_remove_self");
     db.run("DELETE FROM claims WHERE member_id = ?", [mem.id]);
     db.run("DELETE FROM members WHERE id = ?", [mem.id]);
     notify.trip(mem.trip_token);
@@ -517,20 +372,18 @@ const routes: Route[] = [
   }],
 
   // counts how often the acting member opens an owe-card details modal
-  [/^\/api\/trips\/([A-Za-z0-9]+)\/detail-view$/, "POST", async (req, m) => {
-    const s = sessionFrom(req)!;
-    const o = openTrip(m[1], s);
+  [/^\/api\/trips\/([A-Za-z0-9]+)\/detail-view$/, "POST", async (_req, m, _body, s) => {
+    const o = resolveTrip(s, { trip: m[1] }, "edit");
     if (o instanceof Response) return o;
-    const me = myMember(s, o.trip);
-    if (me) db.run("UPDATE members SET detail_views = detail_views + 1 WHERE id = ?", [me.id]);
+    if (o.me) db.run("UPDATE members SET detail_views = detail_views + 1 WHERE id = ?", [o.me.id]);
     return json({ ok: true });
   }],
 
   // ---- expenses ----
-  [/^\/api\/trips\/([A-Za-z0-9]+)\/expenses$/, "POST", async (req, m, body) => {
-    const g = withTrip(req, m[1]);
+  [/^\/api\/trips\/([A-Za-z0-9]+)\/expenses$/, "POST", async (_req, m, body, s) => {
+    const g = resolveTrip(s, { trip: m[1] }, "edit");
     if (g instanceof Response) return g;
-    const { s, t, me } = g;
+    const { trip: t, me } = g;
     const name = String(body.name ?? "").trim();
     if (!name) return err(400, "name_required");
     const currency = String(body.currency ?? t.trip_currency).toUpperCase();
@@ -559,11 +412,10 @@ const routes: Route[] = [
     return json({ id });
   }],
 
-  [/^\/api\/expenses\/([A-Za-z0-9-]+)$/, "GET", async (req, m) => {
-    const s = sessionFrom(req) ?? { token: "", user_sub: null };
-    const e = db.query<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(m[1]);
+  [/^\/api\/expenses\/([A-Za-z0-9-]+)$/, "GET", async (_req, m, _body, s) => {
+    const e = qExpense.get(m[1]);
     if (!e) return err(404, "expense_not_found");
-    const o = openTripView(e.trip_token, s);
+    const o = resolveTrip(s, { expense: e.id }, "view");
     if (o instanceof Response) return o;
     const t = o.trip;
     const members = db.query<Member, [string]>(
@@ -574,14 +426,16 @@ const routes: Route[] = [
       trip: { token: t.token, name: t.name, settle_currency: t.settle_currency },
       access: o.edit ? "edit" : "view",
       members: members.map((mm) => ({ id: mm.id, name: mm.name })),
-      me: s.token ? (myMember(s, t)?.id ?? null) : null,
+      me: o.me?.id ?? null,
     });
   }],
 
-  [/^\/api\/expenses\/([A-Za-z0-9-]+)$/, "PATCH", async (req, m, body) => {
-    const g = withExpense(req, m[1]);
+  [/^\/api\/expenses\/([A-Za-z0-9-]+)$/, "PATCH", async (_req, m, body, s) => {
+    const e = qExpense.get(m[1]);
+    if (!e) return err(404, "expense_not_found");
+    const g = resolveTrip(s, { expense: e.id }, "edit");
     if (g instanceof Response) return g;
-    const { s, e, t, me } = g;
+    const { trip: t, me } = g;
     if (body.name !== undefined) db.run("UPDATE expenses SET name = ? WHERE id = ?", [String(body.name), e.id]);
     if (body.total_minor !== undefined) {
       const v = Number(body.total_minor);
@@ -623,22 +477,22 @@ const routes: Route[] = [
     return json({ ok: true });
   }],
 
-  [/^\/api\/expenses\/([A-Za-z0-9-]+)$/, "DELETE", async (req, m) => {
-    const s = sessionFrom(req)!;
-    const e = db.query<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(m[1]);
-    if (!e) return err(404, "expense_not_found");
-    const o = openTrip(e.trip_token, s);
+  [/^\/api\/expenses\/([A-Za-z0-9-]+)$/, "DELETE", async (_req, m, _body, s) => {
+    const o = resolveTrip(s, { expense: m[1] }, "edit");
     if (o instanceof Response) return o;
+    const e = qExpense.get(m[1])!;
     db.run("DELETE FROM expenses WHERE id = ?", [e.id]);
     notify.trip(o.trip.token);
     return json({ ok: true });
   }],
 
   // Per-person paid toggle: the payer or the person themself.
-  [/^\/api\/expenses\/([A-Za-z0-9-]+)\/paid$/, "PUT", async (req, m, body) => {
-    const g = withExpense(req, m[1]);
+  [/^\/api\/expenses\/([A-Za-z0-9-]+)\/paid$/, "PUT", async (_req, m, body, s) => {
+    const e = qExpense.get(m[1]);
+    if (!e) return err(404, "expense_not_found");
+    const g = resolveTrip(s, { expense: e.id }, "edit");
     if (g instanceof Response) return g;
-    const { s, e, t, me } = g;
+    const { trip: t, me } = g;
     const mid = String(body.member_id ?? "");
     if (me?.id !== e.payer_member_id && me?.id !== mid) return err(403, "payer_or_self_only");
     db.run("INSERT OR IGNORE INTO expense_participants (expense_id, member_id, share_minor, paid) VALUES (?,?,NULL,0)", [e.id, mid]);
@@ -647,10 +501,12 @@ const routes: Route[] = [
     return json({ ok: true });
   }],
 
-  [/^\/api\/expenses\/([A-Za-z0-9-]+)\/participants$/, "PUT", async (req, m, body) => {
-    const g = withExpense(req, m[1]);
+  [/^\/api\/expenses\/([A-Za-z0-9-]+)\/participants$/, "PUT", async (_req, m, body, s) => {
+    const e = qExpense.get(m[1]);
+    if (!e) return err(404, "expense_not_found");
+    const g = resolveTrip(s, { expense: e.id }, "edit");
     if (g instanceof Response) return g;
-    const { s, e, t, me } = g;
+    const { trip: t, me } = g;
     const memberId = String(body.member_id ?? "");
     const on = !!body.on;
     const mem = qMember.get(memberId);
@@ -667,10 +523,12 @@ const routes: Route[] = [
     return json({ ok: true });
   }],
 
-  [/^\/api\/expenses\/([A-Za-z0-9-]+)\/shares$/, "PUT", async (req, m, body) => {
-    const g = withExpense(req, m[1]);
+  [/^\/api\/expenses\/([A-Za-z0-9-]+)\/shares$/, "PUT", async (_req, m, body, s) => {
+    const e = qExpense.get(m[1]);
+    if (!e) return err(404, "expense_not_found");
+    const g = resolveTrip(s, { expense: e.id }, "edit");
     if (g instanceof Response) return g;
-    const { s, e, t, me } = g;
+    const { trip: t, me } = g;
     const memberId = String(body.member_id ?? "");
     const value = body.share_minor === null ? null : Number(body.share_minor);
     const mem = qMember.get(memberId);
@@ -685,10 +543,12 @@ const routes: Route[] = [
     return json({ ok: true });
   }],
 
-  [/^\/api\/expenses\/([A-Za-z0-9-]+)\/split$/, "POST", async (req, m, body) => {
-    const g = withExpense(req, m[1]);
+  [/^\/api\/expenses\/([A-Za-z0-9-]+)\/split$/, "POST", async (_req, m, body, s) => {
+    const e = qExpense.get(m[1]);
+    if (!e) return err(404, "expense_not_found");
+    const g = resolveTrip(s, { expense: e.id }, "edit");
     if (g instanceof Response) return g;
-    const { s, e, t, me } = g;
+    const { trip: t, me } = g;
     const type = String(body.type);
     const parts = db.query<{ member_id: string; share_minor: number | null }, [string]>(
       "SELECT member_id, share_minor FROM expense_participants WHERE expense_id = ?",
@@ -741,10 +601,12 @@ const routes: Route[] = [
   }],
 
   // ---- items ----
-  [/^\/api\/expenses\/([A-Za-z0-9-]+)\/items$/, "POST", async (req, m, body) => {
-    const g = withExpense(req, m[1]);
+  [/^\/api\/expenses\/([A-Za-z0-9-]+)\/items$/, "POST", async (_req, m, body, s) => {
+    const e = qExpense.get(m[1]);
+    if (!e) return err(404, "expense_not_found");
+    const g = resolveTrip(s, { expense: e.id }, "edit");
     if (g instanceof Response) return g;
-    const { s, e, t, me } = g;
+    const { trip: t, me } = g;
     const name = String(body.name ?? "").trim() || "Item";
     const price = Number(body.price_minor ?? 0);
     const sharers: string[] = Array.isArray(body.sharers) ? body.sharers : [];
@@ -760,16 +622,11 @@ const routes: Route[] = [
     return json({ id: itemId });
   }],
 
-  [/^\/api\/items\/([A-Za-z0-9-]+)$/, "PATCH", async (req, m, body) => {
-    const s = sessionFrom(req)!;
-    const item = db.query<{ id: string; expense_id: string }, [string]>(
-      "SELECT id, expense_id FROM items WHERE id = ?",
-    ).get(m[1]);
-    if (!item) return err(404, "item_not_found");
-    const e = db.query<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(item.expense_id)!;
-    const o = openTrip(e.trip_token, s);
+  [/^\/api\/items\/([A-Za-z0-9-]+)$/, "PATCH", async (_req, m, body, s) => {
+    const o = resolveTrip(s, { item: m[1] }, "edit");
     if (o instanceof Response) return o;
-    const me = myMember(s, o.trip);
+    const item = qItem.get(m[1])!;
+    const e = qExpense.get(item.expense_id)!;
     if (body.name !== undefined) db.run("UPDATE items SET name = ? WHERE id = ?", [String(body.name), item.id]);
     if (body.price_minor !== undefined) db.run("UPDATE items SET price_minor = ? WHERE id = ?", [Number(body.price_minor), item.id]);
     if (Array.isArray(body.sharers)) {
@@ -779,33 +636,26 @@ const routes: Route[] = [
         db.run("INSERT OR IGNORE INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,NULL)", [e.id, mid]);
       }
     }
-    edited(e, me?.name ?? null);
+    edited(e, o.me?.name ?? null);
     notify.trip(o.trip.token);
     return json({ ok: true });
   }],
 
-  [/^\/api\/items\/([A-Za-z0-9-]+)$/, "DELETE", async (req, m) => {
-    const s = sessionFrom(req)!;
-    const item = db.query<{ id: string; expense_id: string }, [string]>(
-      "SELECT id, expense_id FROM items WHERE id = ?",
-    ).get(m[1]);
-    if (!item) return err(404, "item_not_found");
-    const e = db.query<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(item.expense_id)!;
-    const o = openTrip(e.trip_token, s);
+  [/^\/api\/items\/([A-Za-z0-9-]+)$/, "DELETE", async (_req, m, _body, s) => {
+    const o = resolveTrip(s, { item: m[1] }, "edit");
     if (o instanceof Response) return o;
-    db.run("DELETE FROM items WHERE id = ?", [item.id]);
+    db.run("DELETE FROM items WHERE id = ?", [m[1]]);
     notify.trip(o.trip.token);
     return json({ ok: true });
   }],
 
   // ---- photos ----
-  [/^\/api\/expenses\/([A-Za-z0-9-]+)\/photos$/, "POST", async (req, m, body) => {
-    const s = sessionFrom(req)!;
-    const e = db.query<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(m[1]);
+  [/^\/api\/expenses\/([A-Za-z0-9-]+)\/photos$/, "POST", async (req, m, body, s) => {
+    const e = qExpense.get(m[1]);
     if (!e) return err(404, "expense_not_found");
-    const o = openTrip(e.trip_token, s);
+    const o = resolveTrip(s, { expense: e.id }, "edit");
     if (o instanceof Response) return o;
-    const me = myMember(s, o.trip);
+    const me = o.me;
     const mime = req.headers.get("content-type") ?? "application/octet-stream";
     if (!mime.startsWith("image/")) return err(400, "not_image");
     const buf = new Uint8Array(await req.arrayBuffer());
@@ -819,39 +669,32 @@ const routes: Route[] = [
     return json({ id });
   }],
 
-  [/^\/api\/photos\/([A-Za-z0-9-]+)$/, "GET", async (req, m) => {
-    const s = sessionFrom(req) ?? { token: "", user_sub: null };
-    const p = db.query<{ mime: string; data: Uint8Array; expense_id: string }, [string]>(
-      "SELECT mime, data, expense_id FROM expense_photos WHERE id = ?",
-    ).get(m[1]);
+  // Viewers can read photos: they already see the expense payload that lists them.
+  [/^\/api\/photos\/([A-Za-z0-9-]+)$/, "GET", async (_req, m, _body, s) => {
+    const p = qPhoto.get(m[1]);
     if (!p) return err(404, "photo_not_found");
-    const e = db.query<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(p.expense_id)!;
-    const o = openTrip(e.trip_token, s);
+    const o = resolveTrip(s, { expense: p.expense_id }, "view");
     if (o instanceof Response) return o;
     return new Response(Buffer.from(p.data), { headers: { "content-type": p.mime, "cache-control": "private, max-age=3600" } });
   }],
 
-  [/^\/api\/photos\/([A-Za-z0-9-]+)$/, "DELETE", async (req, m) => {
-    const s = sessionFrom(req)!;
-    const p = db.query<{ id: string; expense_id: string }, [string]>(
-      "SELECT id, expense_id FROM expense_photos WHERE id = ?",
-    ).get(m[1]);
-    if (!p) return err(404, "photo_not_found");
-    const e = db.query<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(p.expense_id)!;
-    const o = openTrip(e.trip_token, s);
+  [/^\/api\/photos\/([A-Za-z0-9-]+)$/, "DELETE", async (_req, m, _body, s) => {
+    const o = resolveTrip(s, { photo: m[1] }, "edit");
     if (o instanceof Response) return o;
-    const me = myMember(s, o.trip);
+    const p = qPhoto.get(m[1])!;
+    const e = qExpense.get(p.expense_id)!;
     db.run("DELETE FROM expense_photos WHERE id = ?", [p.id]);
-    edited(e, me?.name ?? null);
+    edited(e, o.me?.name ?? null);
     notify.trip(o.trip.token);
     return json({ ok: true });
   }],
 
+
   // ---- settlements ----
-  [/^\/api\/trips\/([A-Za-z0-9]+)\/settlements$/, "POST", async (req, m, body) => {
-    const g = withTrip(req, m[1]);
+  [/^\/api\/trips\/([A-Za-z0-9]+)\/settlements$/, "POST", async (_req, m, body, s) => {
+    const g = resolveTrip(s, { trip: m[1] }, "edit");
     if (g instanceof Response) return g;
-    const { s, t, me } = g;
+    const { trip: t, me } = g;
     const from = qMember.get(String(body.from_member ?? ""));
     const to = qMember.get(String(body.to_member ?? ""));
     if (!from || !to || from.trip_token !== t.token || to.trip_token !== t.token || from.id === to.id)
@@ -865,24 +708,17 @@ const routes: Route[] = [
     return json({ id });
   }],
 
-  [/^\/api\/settlements\/([A-Za-z0-9-]+)$/, "DELETE", async (req, m) => {
-    const s = sessionFrom(req)!;
-    const st = db.query<{ id: string; trip_token: string }, [string]>(
-      "SELECT id, trip_token FROM settlements WHERE id = ?",
-    ).get(m[1]);
-    if (!st) return err(404, "settlement_not_found");
-    const o = openTrip(st.trip_token, s);
+  [/^\/api\/settlements\/([A-Za-z0-9-]+)$/, "DELETE", async (_req, m, _body, s) => {
+    const o = resolveTrip(s, { settlement: m[1] }, "edit");
     if (o instanceof Response) return o;
-    db.run("DELETE FROM settlements WHERE id = ?", [st.id]);
-    notify.trip(st.trip_token);
+    db.run("DELETE FROM settlements WHERE id = ?", [m[1]]);
+    notify.trip(o.trip.token);
     return json({ ok: true });
   }],
 
   // ---- journeys ----
-  [/^\/api\/accessible-trips$/, "GET", async (req) => {
-    const s = sessionFrom(req);
-    if (!s) return json({ trips: [] });
-    const jOf = db.prepare<{ journey_token: string; name: string }, [string]>(
+  [/^\/api\/accessible-trips$/, "GET", async (_req, _m, _body, s) => {
+    const jOf = stmt<{ journey_token: string; name: string }, [string]>(
       "SELECT jt.journey_token, j.name FROM journey_trips jt JOIN journeys j ON j.token = jt.journey_token WHERE jt.trip_token = ?");
     return json({
       trips: accessibleTrips(s).map((t) => {
@@ -893,12 +729,10 @@ const routes: Route[] = [
   }],
 
   // distinct member names across this session's accessible trips, most-used first
-  [/^\/api\/member-suggestions$/, "GET", async (req) => {
-    const s = sessionFrom(req);
-    if (!s) return json({ suggestions: [] });
+  [/^\/api\/member-suggestions$/, "GET", async (_req, _m, _body, s) => {
     const trips = accessibleTrips(s);
     if (!trips.length) return json({ suggestions: [] });
-    const q = db.prepare<{ name: string; n: number }, [string]>(
+    const q = stmt<{ name: string; n: number }, [string]>(
       "SELECT name, COUNT(*) n FROM members WHERE trip_token = ? GROUP BY name COLLATE NOCASE");
     const counts = new Map<string, { name: string; n: number }>();
     for (const t of trips)
@@ -913,10 +747,8 @@ const routes: Route[] = [
     });
   }],
 
-  [/^\/api\/journeys$/, "POST", async (req, _m, body) => {
-    const { session: s, headers } = ensureSession(req);
+  [/^\/api\/journeys$/, "POST", async (_req, _m, body, s) => {
     const name = String(body.name ?? "").trim();
-    if (!name) return err(400, "name_required");
     const wanted = Array.isArray(body.trip_tokens) ? body.trip_tokens.map(String) : [];
     const allowed = new Map(accessibleTrips(s).map((t) => [t.token, t]));
     const picked = [...new Set(wanted)].map((t) => allowed.get(t)).filter((t): t is Trip => !!t);
@@ -930,14 +762,13 @@ const routes: Route[] = [
       [token, name, sc, now()]);
     for (const tt of tokens)
       db.run("INSERT OR IGNORE INTO journey_trips (journey_token, trip_token) VALUES (?,?)", [token, tt]);
-    return json({ token }, { headers });
+    return json({ token });
   }],
 
-  [/^\/api\/journeys\/([A-Za-z0-9]+)$/, "GET", async (req, m) => {
-    const s = sessionFrom(req) ?? { token: "", user_sub: null };
-    const j = qJourney.get(m[1]);
-    if (!j) return err(404, "journey_not_found");
-    if (!journeyAccess(s, j)) return err(403, "no_access");
+  [/^\/api\/journeys\/([A-Za-z0-9]+)$/, "GET", async (_req, m, _body, s) => {
+    const gj = resolveJourney(s, m[1]);
+    if (gj instanceof Response) return gj;
+    const j = gj.j;
     const trips = journeyTrips(j);
     // merge hints: same name across different trips, not already one person
     const { persons, keyOf } = journeyPeople(j);
@@ -993,9 +824,7 @@ const routes: Route[] = [
   }],
 
   // journeys this session can open: via a journey-link grant or a member trip
-  [/^\/api\/my-journeys$/, "GET", async (req) => {
-    const s = sessionFrom(req);
-    if (!s) return json({ journeys: [] });
+  [/^\/api\/my-journeys$/, "GET", async (_req, _m, _body, s) => {
     const granted = db.query<{ journey_token: string }, [string]>(
       "SELECT journey_token FROM journey_access WHERE session_token = ?",
     ).all(s.token).map((r) => r.journey_token);
@@ -1005,28 +834,27 @@ const routes: Route[] = [
          SELECT trip_token FROM consents WHERE session_token = ?
          UNION SELECT trip_token FROM members WHERE user_sub = ?)`,
     ).all(s.token, s.user_sub).map((r) => r.journey_token);
+    // filter through journeyAccess: a consent at a stale password_ver must not list
     const journeys = [...new Set([...granted, ...viaTrips])]
       .map((t) => qJourney.get(t))
-      .filter((j): j is Journey => !!j)
+      .filter((j): j is Journey => !!j && journeyAccess(s, j))
       .map((j) => ({ token: j.token, name: j.name, settle_currency: j.settle_currency }));
     return json({ journeys });
   }],
 
   // journey link: opening it (POST join) grants read access to every member trip
-  [/^\/api\/journeys\/([A-Za-z0-9]+)\/join$/, "POST", async (req, m) => {
-    const { session: s, headers } = ensureSession(req);
+  [/^\/api\/journeys\/([A-Za-z0-9]+)\/join$/, "POST", async (_req, m, _body, s) => {
     const j = qJourney.get(m[1]);
     if (!j) return err(404, "journey_not_found");
-    db.run("INSERT OR IGNORE INTO journey_access (session_token, journey_token, created_at) VALUES (?,?,?)",
-      [s.token, j.token, now()]);
+    grantJourneyAccess(s, j);
     for (const t of journeyTrips(j)) notify.trip(t.token);
-    return json({ ok: true }, { headers });
+    return json({ ok: true });
   }],
 
-  [/^\/api\/journeys\/([A-Za-z0-9]+)\/trips$/, "POST", async (req, m, body) => {
-    const g = withJourney(req, m[1]);
+  [/^\/api\/journeys\/([A-Za-z0-9]+)\/trips$/, "POST", async (_req, m, body, s) => {
+    const g = resolveJourney(s, m[1]);
     if (g instanceof Response) return g;
-    const { s, j } = g;
+    const { j } = g;
     const tt = String(body.trip_token ?? "");
     const t = qTrip.get(tt);
     if (!t) return err(404, "trip_not_found");
@@ -1039,10 +867,10 @@ const routes: Route[] = [
     return json({ ok: true });
   }],
 
-  [/^\/api\/journeys\/([A-Za-z0-9]+)\/trips\/([A-Za-z0-9]+)$/, "DELETE", async (req, m) => {
-    const g = withJourney(req, m[1]);
+  [/^\/api\/journeys\/([A-Za-z0-9]+)\/trips\/([A-Za-z0-9]+)$/, "DELETE", async (_req, m, _body, s) => {
+    const g = resolveJourney(s, m[1]);
     if (g instanceof Response) return g;
-    const { s, j } = g;
+    const { j } = g;
     db.run("DELETE FROM journey_trips WHERE journey_token = ? AND trip_token = ?", [j.token, m[2]]);
     db.run("DELETE FROM journey_merges WHERE journey_token = ? AND member_id IN (SELECT id FROM members WHERE trip_token = ?)", [j.token, m[2]]);
     notify.journey(j.token);
@@ -1050,17 +878,17 @@ const routes: Route[] = [
     return json({ ok: true });
   }],
 
-  [/^\/api\/journeys\/([A-Za-z0-9]+)\/merge$/, "POST", async (req, m, body) => {
-    const g = withJourney(req, m[1]);
+  [/^\/api\/journeys\/([A-Za-z0-9]+)\/merge$/, "POST", async (_req, m, body, s) => {
+    const g = resolveJourney(s, m[1]);
     if (g instanceof Response) return g;
-    const { s, j } = g;
+    const { j } = g;
     const ids = (Array.isArray(body.member_ids) ? body.member_ids : []).map(String);
     const inJourney = new Set(journeyTrips(j).flatMap((t) =>
       db.query<{ id: string }, [string]>("SELECT id FROM members WHERE trip_token = ?").all(t.token).map((r) => r.id)));
     const valid = ids.filter((id) => inJourney.has(id));
     if (valid.length < 2) return err(400, "need_two_members");
     // merge into the group of the first already-grouped member, else new group
-    const existing = db.prepare<{ group_id: string }, [string, string]>(
+    const existing = stmt<{ group_id: string }, [string, string]>(
       "SELECT group_id FROM journey_merges WHERE journey_token = ? AND member_id = ? LIMIT 1",
     );
     let gid: string | null = null;
@@ -1074,8 +902,8 @@ const routes: Route[] = [
 
   // journey settings: rename + Journey Wrapped toggle. Dissolving a journey
   // only removes the grouping — its trips are untouched.
-  [/^\/api\/journeys\/([A-Za-z0-9]+)\/settings$/, "PATCH", async (req, m, body) => {
-    const g = withJourney(req, m[1]);
+  [/^\/api\/journeys\/([A-Za-z0-9]+)\/settings$/, "PATCH", async (_req, m, body, s) => {
+    const g = resolveJourney(s, m[1]);
     if (g instanceof Response) return g;
     const { j } = g;
     if (body.name !== undefined) {
@@ -1090,8 +918,8 @@ const routes: Route[] = [
     return json({ ok: true });
   }],
 
-  [/^\/api\/journeys\/([A-Za-z0-9]+)$/, "DELETE", async (req, m, body) => {
-    const g = withJourney(req, m[1]);
+  [/^\/api\/journeys\/([A-Za-z0-9]+)$/, "DELETE", async (_req, m, body, s) => {
+    const g = resolveJourney(s, m[1]);
     if (g instanceof Response) return g;
     const { j } = g;
     if (String(body.name ?? "") !== j.name) return err(400, "name_mismatch");
@@ -1105,19 +933,19 @@ const routes: Route[] = [
     return json({ ok: true });
   }],
 
-  [/^\/api\/journeys\/([A-Za-z0-9]+)\/merge\/([A-Za-z0-9-]+)$/, "DELETE", async (req, m) => {
-    const g = withJourney(req, m[1]);
+  [/^\/api\/journeys\/([A-Za-z0-9]+)\/merge\/([A-Za-z0-9-]+)$/, "DELETE", async (_req, m, _body, s) => {
+    const g = resolveJourney(s, m[1]);
     if (g instanceof Response) return g;
-    const { s, j } = g;
+    const { j } = g;
     db.run("DELETE FROM journey_merges WHERE journey_token = ? AND member_id = ?", [j.token, m[2]]);
     notify.journey(j.token);
     return json({ ok: true });
   }],
 
   // ---- SSE ----
-  [/^\/api\/trips\/([A-Za-z0-9]+)\/events$/, "GET", async (req, m) => {
-    const s = sessionFrom(req) ?? { token: "", user_sub: null };
-    const o = openTrip(m[1], s);
+  [/^\/api\/trips\/([A-Za-z0-9]+)\/events$/, "GET", async (_req, m, _body, s) => {
+    // Viewers get live updates too — they can read the trip, so they can watch it.
+    const o = resolveTrip(s, { trip: m[1] }, "view");
     if (o instanceof Response) return o;
     const token = o.trip.token;
     let ctrl!: ReadableStreamDefaultController;
@@ -1156,12 +984,15 @@ async function handle(req: Request): Promise<Response> {
     else return err(404, "not_found");
   }
   const isApi = path.startsWith("/api/");
-  const { headers: sessionHeaders } = isApi ? ensureSession(req) : { headers: {} };
+  // Session resolved once: handlers receive `s`; the cookie rides out on any response.
+  const { session, headers: sessionHeaders } = isApi
+    ? ensureSession(req)
+    : { session: null as Session | null, headers: {} };
 
   for (const [re, method, fn] of routes) {
     const m = re.exec(path);
     if (m && req.method === method) {
-      const res = await fn(req, m, body);
+      const res = await fn(req, m, body, session!);
       const sc = (sessionHeaders as Record<string, string>)["set-cookie"];
       if (sc && !res.headers.has("set-cookie")) res.headers.set("set-cookie", sc);
       return res;
