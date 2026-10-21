@@ -1,9 +1,10 @@
-import { db } from "./db.ts";
+import { db, stmt } from "./db.ts";
 import { decimals } from "./currencies.ts";
 import type { Trip, Journey, Member, ExpenseRow } from "./types.ts";
 
-const qMember = db.prepare<Member, [string]>("SELECT * FROM members WHERE id = ?");
-const qTrip = db.prepare<Trip, [string]>("SELECT * FROM trips WHERE token = ?");
+// Lazy prepared statements — getDb() isn't open until openDb() runs.
+const qMember = { get: (id: string) => stmt<Member, [string]>("SELECT * FROM members WHERE id = ?").get(id) };
+const qTrip = { get: (t: string) => stmt<Trip, [string]>("SELECT * FROM trips WHERE token = ?").get(t) };
 
 export function sharesForExpense(expenseId: string): { member_id: string; share_minor: number | null }[] {
   return db.query<{ member_id: string; share_minor: number | null }, [string]>(
