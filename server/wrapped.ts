@@ -8,7 +8,7 @@ import type { TripReview } from "../shared/wire.ts";
 // member ids (Trip Wrapped) or merged person keys (Journey Wrapped).
 // Pure read: rows in -> awards out.
 
-type TripStats = {
+export type TripStats = {
   paid: Record<string, number>;       // settle units paid
   consumed: Record<string, number>;   // settle units owed
   payerCount: Record<string, number>; // expenses paid
@@ -21,11 +21,24 @@ type TripStats = {
   catTotal: Record<string, number>;
   pairShare: Record<string, number>;  // "a>b" -> co-share count
   tripleShare: Record<string, number>;
+  quadShare: Record<string, number>;  // "a>b>c>d" -> co-share count
   settlePair: Record<string, number>;
+  settleSum: Record<string, number>;  // "a>b" -> settle units moved
+  catCombo: Record<string, number>;   // "cat>a>b[>c[>d]]" -> combo members' share units
+  duoOnly: Record<string, number>;    // "a>b" -> expenses shared by exactly the two
+  trioOnly: Record<string, number>;   // same for exactly three
+  hourPair: Record<string, number>;   // "am|pm>a>b" -> co-shares before 9am / after 9pm
+  coverPair: Record<string, number>;  // "payer>sharer" -> times payer fronted for sharer
+  coveredBy: Record<string, Set<string>>; // payer -> distinct people they covered
+  itemLines: Record<string, number>;  // member -> itemized lines under their name
+  memberDay: Record<string, number>;  // "member>YYYY-MM-DD" -> share units
   currencies: Record<string, Set<string>>;
   paidTrip: Set<string>;    // paid at least one expense (this trip)
   coveredTrip: Set<string>; // paid an expense someone else shared (this trip)
   biggestExp: { name: string; units: number; sharers: string[] } | null;
+  crowdExp: { name: string; units: number; sharers: string[] } | null;  // most people on one expense
+  dinnerExp: { name: string; units: number; sharers: string[] } | null; // biggest expense with a full-ish table
+  allIn: number;            // expenses every eligible member shared
   daySpend: Record<string, number>; // "YYYY-MM-DD" -> spend in settle units
   totalSpend: number;
   nExp: number;
@@ -35,15 +48,32 @@ function emptyStats(): TripStats {
   return {
     paid: {}, consumed: {}, payerCount: {}, partCount: {}, owed: {},
     createdCount: {}, typedCount: {}, biggestShare: {}, catShare: {},
-    catTotal: {}, pairShare: {}, tripleShare: {}, settlePair: {},
-  currencies: {}, paidTrip: new Set(), coveredTrip: new Set(),
-  daySpend: {}, biggestExp: null, totalSpend: 0, nExp: 0,
+    catTotal: {}, pairShare: {}, tripleShare: {}, quadShare: {}, settlePair: {},
+    settleSum: {}, catCombo: {}, duoOnly: {}, trioOnly: {}, hourPair: {},
+    coverPair: {}, coveredBy: {}, itemLines: {}, memberDay: {},
+    currencies: {}, paidTrip: new Set(), coveredTrip: new Set(),
+    crowdExp: null, dinnerExp: null, allIn: 0,
+    daySpend: {}, biggestExp: null, totalSpend: 0, nExp: 0,
   };
 }
 
 const add = (rec: Record<string, number>, k: string, v: number) => { rec[k] = (rec[k] ?? 0) + v; };
 
-function collectStats(rows: TripRows): TripStats {
+// All sorted-size subsets of sorted ids. Bounded by caller (combo loops only
+// run when ids.length <= 10 to keep the stats maps small).
+function* subsets(ids: string[], size: number): Generator<string[]> {
+  const idx: number[] = [];
+  function* rec(start: number): Generator<string[]> {
+    if (idx.length === size) { yield idx.map((i) => ids[i]); return; }
+    for (let i = start; i <= ids.length - (size - idx.length); i++) {
+      idx.push(i); yield* rec(i + 1); idx.pop();
+    }
+  }
+  yield* rec(0);
+}
+
+
+export function collectStats(rows: TripRows): TripStats {
   const { trip: t, members } = rows;
   const out = new Set(members.filter((m) => m.opted_out_fun).map((m) => m.id));
   const dec = decimals(t.settle_currency);
@@ -74,6 +104,11 @@ function collectStats(rows: TripRows): TripStats {
       add(st.daySpend, e.recorded_at.slice(0, 10), units);
       add(st.partCount, s.member_id, 1);
       st.biggestShare[s.member_id] = Math.max(st.biggestShare[s.member_id] ?? 0, units);
+      add(st.memberDay, `${s.member_id}>${e.recorded_at.slice(0, 10)}`, units);
+      if (e.payer_member_id && !out.has(e.payer_member_id) && s.member_id !== e.payer_member_id) {
+        add(st.coverPair, `${e.payer_member_id}>${s.member_id}`, 1);
+        (st.coveredBy[e.payer_member_id] ??= new Set()).add(s.member_id);
+      }
       (st.currencies[s.member_id] ??= new Set()).add(e.currency);
       if (s.member_id !== e.payer_member_id) add(st.owed, s.member_id, units);
       if (e.category) {
@@ -83,19 +118,51 @@ function collectStats(rows: TripRows): TripStats {
     }
     if (!st.biggestExp || totalUnits > st.biggestExp.units)
       st.biggestExp = { name: e.name, units: totalUnits, sharers: sharerIds.filter((id) => !out.has(id)) };
+    for (const it of rows.items[e.id] ?? [])
+      for (const mid of it.sharers)
+        if (!out.has(mid)) add(st.itemLines, mid, 1);
     for (const p of rows.participants[e.id] ?? [])
       if (p.share_minor !== null && !out.has(p.member_id))
         add(st.typedCount, p.member_id, 1);
     const ids = sharerIds.filter((id) => !out.has(id)).sort();
-    for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
-      add(st.pairShare, `${ids[i]}>${ids[j]}`, 1);
-      for (let l = j + 1; l < ids.length; l++)
-        add(st.tripleShare, `${ids[i]}>${ids[j]}>${ids[l]}`, 1);
+    const eligible = members.length - out.size;
+    if (ids.length === eligible && eligible >= 3) st.allIn += 1;
+    if (!st.crowdExp || ids.length > st.crowdExp.sharers.length)
+      st.crowdExp = { name: e.name, units: totalUnits, sharers: ids };
+    if (ids.length >= Math.min(4, eligible) && (!st.dinnerExp || totalUnits > st.dinnerExp.units))
+      st.dinnerExp = { name: e.name, units: totalUnits, sharers: ids };
+    // time-of-day buckets are whatever clock stamped recorded_at — good
+    // enough for silly "early birds / last call" awards
+    const hour = Number(e.recorded_at.slice(11, 13));
+    const daypart = hour < 9 ? "am" : hour >= 21 ? "pm" : null;
+    if (ids.length <= 10) {
+      const comboUnits = sharers.filter((s) => !out.has(s.member_id))
+        .reduce((sum, s) => sum + (s.minor! / 10 ** decimals(e.currency)) * rate, 0);
+      for (const c of subsets(ids, 2)) {
+        const k = c.join(">");
+        add(st.pairShare, k, 1);
+        if (daypart) add(st.hourPair, `${daypart}>${k}`, 1);
+        if (e.category) add(st.catCombo, `${e.category}>${k}`, comboUnits);
+      }
+      for (const c of subsets(ids, 3)) {
+        const k = c.join(">");
+        add(st.tripleShare, k, 1);
+        if (e.category) add(st.catCombo, `${e.category}>${k}`, comboUnits);
+      }
+      for (const c of subsets(ids, 4)) {
+        const k = c.join(">");
+        add(st.quadShare, k, 1);
+        if (e.category) add(st.catCombo, `${e.category}>${k}`, comboUnits);
+      }
+      if (ids.length === 2) add(st.duoOnly, ids.join(">"), 1);
+      if (ids.length === 3) add(st.trioOnly, ids.join(">"), 1);
     }
   }
   for (const s of rows.settlements) {
     if (out.has(s.from_member) || out.has(s.to_member)) continue;
-    add(st.settlePair, [s.from_member, s.to_member].sort().join(">"), 1);
+    const pk = [s.from_member, s.to_member].sort().join(">");
+    add(st.settlePair, pk, 1);
+    add(st.settleSum, pk, s.amount_minor / 10 ** dec);
     add(st.owed, s.from_member, -s.amount_minor / 10 ** dec);
   }
   return st;
@@ -114,13 +181,39 @@ function mergeInto(dst: TripStats, src: TripStats, keyOf: (id: string) => string
     add(dst.catShare, `${cat}>${keyOf(mid)}`, v);
   }
   for (const [k, v] of Object.entries(src.catTotal)) add(dst.catTotal, k, v);
-  for (const f of ["pairShare", "tripleShare", "settlePair"] as const)
+  for (const f of ["pairShare", "tripleShare", "quadShare", "settlePair", "settleSum", "duoOnly", "trioOnly"] as const)
     for (const [k, v] of Object.entries(src[f])) {
       const orig = k.split(">");
       const parts = [...new Set(orig.map(keyOf))].sort();
       if (parts.length !== orig.length) continue; // collapses onto one person
       add(dst[f], parts.join(">"), v);
     }
+  for (const [k, v] of Object.entries(src.catCombo)) {
+    const [cat, ...orig] = k.split(">");
+    const parts = [...new Set(orig.map(keyOf))].sort();
+    if (parts.length !== orig.length) continue;
+    add(dst.catCombo, `${cat}>${parts.join(">")}`, v);
+  }
+  for (const [k, v] of Object.entries(src.hourPair)) {
+    const [bucket, ...orig] = k.split(">");
+    const parts = [...new Set(orig.map(keyOf))].sort();
+    if (parts.length !== orig.length) continue;
+    add(dst.hourPair, `${bucket}>${parts.join(">")}`, v);
+  }
+  for (const [k, v] of Object.entries(src.coverPair)) {
+    const [payer, sharer] = k.split(">").map(keyOf);
+    if (payer === sharer) continue;
+    add(dst.coverPair, `${payer}>${sharer}`, v);
+  }
+  for (const [k, set] of Object.entries(src.coveredBy)) {
+    const d = (dst.coveredBy[keyOf(k)] ??= new Set());
+    for (const id of set) { const nk = keyOf(id); if (nk !== keyOf(k)) d.add(nk); }
+  }
+  for (const [k, v] of Object.entries(src.itemLines)) add(dst.itemLines, keyOf(k), v);
+  for (const [k, v] of Object.entries(src.memberDay)) {
+    const [mid, day] = k.split(">");
+    add(dst.memberDay, `${keyOf(mid)}>${day}`, v);
+  }
   for (const [k, set] of Object.entries(src.currencies)) {
     const nk = keyOf(k);
     const d = (dst.currencies[nk] ??= new Set());
@@ -165,8 +258,8 @@ function review(st: TripStats, entities: Entity[], fmtU: (v: number) => string):
     daily,
   };
 }
-type Entity = { key: string; name: string; views: number };
-type Award = { emoji: string; title: string; members: string[]; detail: string; score?: number };
+export type Entity = { key: string; name: string; views: number };
+export type Award = { emoji: string; title: string; members: string[]; detail: string; score?: number };
 
 function top(rec: Record<string, number>, min = 0): { key: string; v: number } | null {
   let best: { key: string; v: number } | null = null;
@@ -194,7 +287,7 @@ function pick(awards: Award[], eligibleCount: number): Award[] {
   return picked.slice(0, 7);
 }
 
-function buildAwards(entities: Entity[], st: TripStats, fmtU: (v: number) => string): Award[] {
+export function buildAwards(entities: Entity[], st: TripStats, fmtU: (v: number) => string): Award[] {
   const name = (key: string) => entities.find((e) => e.key === key)?.name ?? "?";
   const awards: Award[] = [];
   const totalSpend = st.totalSpend || 1;
@@ -249,6 +342,118 @@ function buildAwards(entities: Entity[], st: TripStats, fmtU: (v: number) => str
   const trioTop = top(st.tripleShare);
   if (trioTop && trioTop.v >= 2) awards.push({ emoji: "⚔️", title: "Three Musketeers", members: trioTop.key.split(">").map(name), detail: `${trioTop.v} items together`, score: 14 + trioTop.v / nExp });
 
+  // ---- bigger menu: duo, group, and solo achievements ----
+  const nEnt = entities.length;
+  const membersOf = (k: string) => k.split(">").map(name);
+  // "cat>a>b[>c[>d]]" entries -> aggregate per combo for the given categories + combo size
+  const comboTop = (cats: string[], size: number): { key: string; v: number } | null => {
+    const rec: Record<string, number> = {};
+    for (const [k, v] of Object.entries(st.catCombo)) {
+      const [cat, ...ids] = k.split(">");
+      if (cats.includes(cat) && ids.length === size) add(rec, ids.join(">"), v);
+    }
+    return top(rec);
+  };
+  const comboAnyTop = (size: number): { key: string; v: number } | null => {
+    const rec: Record<string, number> = {};
+    for (const [k, v] of Object.entries(st.catCombo)) {
+      const ids = k.split(">").slice(1);
+      if (ids.length === size) add(rec, ids.join(">"), v);
+    }
+    return top(rec);
+  };
+  const catAwards: [number, string[], string, string][] = [
+    // [combo size, categories, emoji, title]
+    [2, ["Lodging"], "🏨", "Roommates"],
+    [2, ["Drinks"], "🍻", "Drinking Buddies"],
+    [2, ["Food"], "🍽️", "Table for Two"],
+    [2, ["Transport"], "🚕", "Jet Lag Gang"],
+    [2, ["Drinks", "Nightlife"], "🌃", "Duo of Darkness"],
+    [2, ["Activities", "Tickets"], "🎢", "Adventure Buddies"],
+    [3, ["Drinks", "Nightlife"], "🌙", "Trio de Noche"],
+    [3, ["Lodging"], "🏨", "The Threesome Suite"],
+    [3, ["Food"], "🍽️", "Three's a Crowd"],
+    [4, ["Transport"], "🚕", "The Van"],
+    [4, ["Food"], "🍽️", "Dinner for Four"],
+    [4, ["Activities", "Tickets"], "🎢", "The Foursome"],
+  ];
+  for (const [size, cats, emoji, title] of catAwards) {
+    if (size >= 3 && nEnt <= size) continue; // a trio/quad that is everyone is The Whole Squad
+    const c = comboTop(cats, size);
+    if (c) awards.push({ emoji, title, members: membersOf(c.key), detail: `${fmtU(c.v)} of shared ${cats.map((x) => x.toLowerCase()).join("+")}`, score: 15 + c.v / totalSpend });
+  }
+  // directional cover: who always fronts for whom
+  const piggyTop = top(st.coverPair, 1);
+  if (piggyTop && nEnt >= 2) {
+    const [payer, sharer] = piggyTop.key.split(">");
+    awards.push({ emoji: "🫰", title: "Cover Piggybacker", members: [name(sharer), name(payer)], detail: `${name(payer)} covered them ${piggyTop.v} times`, score: 15 + Math.min(piggyTop.v / 5, 1) });
+  }
+  // tag team: pair with the most alternating cover (A fronted for B and B for A)
+  const coverByPair: Record<string, number> = {};
+  for (const [k, v] of Object.entries(st.coverPair)) {
+    const [a, b] = k.split(">");
+    add(coverByPair, [a, b].sort().join(">"), 0); // ensure key exists
+  }
+  const mutual: Record<string, number> = {};
+  for (const k of Object.keys(coverByPair)) {
+    const [a, b] = k.split(">");
+    mutual[k] = Math.min(st.coverPair[`${a}>${b}`] ?? 0, st.coverPair[`${b}>${a}`] ?? 0);
+  }
+  const tagTop = top(mutual, 0);
+  if (tagTop) awards.push({ emoji: "🤝", title: "Tag Team", members: membersOf(tagTop.key), detail: `covered each other ${tagTop.v} times each way`, score: 15 + Math.min(tagTop.v / 4, 1) });
+  const duoOnlyTop = top(st.duoOnly, 1);
+  if (duoOnlyTop && nEnt >= 3) awards.push({ emoji: "👯", title: "Two-Person Crew", members: membersOf(duoOnlyTop.key), detail: `${duoOnlyTop.v} expenses just the two of them`, score: 14 + Math.min(duoOnlyTop.v / nExp, 1) });
+  const moneyTop = top(st.settleSum);
+  if (moneyTop) awards.push({ emoji: "💑", title: "Money Couple", members: membersOf(moneyTop.key), detail: `${fmtU(moneyTop.v)} settled between them`, score: 13 + moneyTop.v / totalSpend });
+  for (const [bucket, emoji, title, label] of [["am", "🌅", "Early Birds", "before 9am"], ["pm", "🌙", "Last Call Duo", "after 9pm"]] as const) {
+    const rec = Object.fromEntries(Object.entries(st.hourPair).filter(([k]) => k.startsWith(`${bucket}>`)).map(([k, v]) => [k.slice(3), v]));
+    const t2 = top(rec, 1);
+    if (t2) awards.push({ emoji, title, members: membersOf(t2.key), detail: `${t2.v} shared expenses ${label}`, score: 13 + Math.min(t2.v / 4, 1) });
+  }
+  // group-wide achievements (score capped so they don't always headline)
+  if (st.allIn > 0) {
+    const everyone = entities.map((e) => e.name);
+    awards.push({ emoji: "🧑‍🤝‍🧑", title: "The Whole Squad", members: everyone, detail: `${st.allIn} expense${st.allIn > 1 ? "s" : ""} everyone shared`, score: 16 });
+  }
+  if (st.dinnerExp && st.dinnerExp.sharers.length >= 4)
+    awards.push({ emoji: "🍽️", title: "Family Dinner", members: st.dinnerExp.sharers.map(name), detail: `${st.dinnerExp.name} · ${fmtU(st.dinnerExp.units)}`, score: 14 + st.dinnerExp.units / totalSpend });
+  if (st.crowdExp && st.crowdExp.sharers.length >= 4)
+    awards.push({ emoji: "🤹", title: "The Circus", members: st.crowdExp.sharers.map(name), detail: `${st.crowdExp.sharers.length} people on "${st.crowdExp.name}"`, score: 13 + st.crowdExp.sharers.length / nEnt });
+  const deg: Record<string, Set<string>> = {};
+  for (const k of Object.keys(st.pairShare)) {
+    const [a, b] = k.split(">");
+    (deg[a] ??= new Set()).add(b);
+    (deg[b] ??= new Set()).add(a);
+  }
+  const pack = entities.filter((e) => (deg[e.key]?.size ?? 0) >= Math.min(3, nEnt - 1));
+  if (pack.length === nEnt && nEnt >= 4)
+    awards.push({ emoji: "🎉", title: "The Pack", members: pack.map((e) => e.name), detail: "everyone split expenses with 3+ different people", score: 15.5 });
+  const settled = entities.filter((e) => (st.owed[e.key] ?? 0) <= 0.005 * 10 ** 2);
+  if (settled.length === nEnt && nEnt >= 2 && Object.keys(st.settlePair).length > 0)
+    awards.push({ emoji: "🧹", title: "Clean Sweep", members: settled.map((e) => e.name), detail: "every balance squared away", score: 15.8 });
+  // solo additions
+  const soloTop = top(Object.fromEntries(entities.map((e) => [e.key, (st.consumed[e.key] ?? 0) / totalSpend])), 0.3);
+  if (soloTop && soloTop.v > 0.3) awards.push({ emoji: "💪", title: "Solo Mission", members: [name(soloTop.key)], detail: `${Math.round(soloTop.v * 100)}% of the whole trip's spend`, score: 16 + soloTop.v });
+  const luckyTop = top(Object.fromEntries(entities.filter((e) => (st.paid[e.key] ?? 0) > 0).map((e) => [e.key, (st.paid[e.key] ?? 0) - (st.consumed[e.key] ?? 0)])));
+  if (luckyTop && luckyTop.v > 0) awards.push({ emoji: "🍀", title: "The Lucky One", members: [name(luckyTop.key)], detail: `fronted ${fmtU(luckyTop.v)} more than they consumed`, score: 12 + luckyTop.v / totalSpend });
+  const itemTop = top(st.itemLines, 1);
+  if (itemTop) awards.push({ emoji: "📝", title: "The Itemizer", members: [name(itemTop.key)], detail: `${itemTop.v} itemized lines to their name`, score: 11 + Math.min(itemTop.v / 10, 1) });
+  const sponTop = top(Object.fromEntries(Object.entries(st.coveredBy).map(([k, s]) => [k, s.size])), 1);
+  if (sponTop) awards.push({ emoji: "🌟", title: "The Sponsor", members: [name(sponTop.key)], detail: `fronted for ${sponTop.v} different people`, score: 13 + sponTop.v / Math.max(nEnt - 1, 1) });
+  const dayShare: Record<string, number> = {};
+  for (const e of entities) {
+    const days = Object.entries(st.memberDay).filter(([k]) => k.startsWith(`${e.key}>`));
+    const total = st.consumed[e.key] ?? 0;
+    if (total > 0) dayShare[e.key] = Math.max(...days.map(([, v]) => v)) / total;
+  }
+  const splurgeTop = top(dayShare, 0.5);
+  if (splurgeTop) awards.push({ emoji: "⚡", title: "The Splurger", members: [name(splurgeTop.key)], detail: `${Math.round(splurgeTop.v * 100)}% of their spend in one day`, score: 11 + splurgeTop.v });
+  const big3Top = comboAnyTop(3);
+  if (big3Top && nEnt >= 4) awards.push({ emoji: "💰", title: "The Big Three", members: membersOf(big3Top.key), detail: `${fmtU(big3Top.v)} of categorized spend together`, score: 15 + big3Top.v / totalSpend });
+  const big4Top = comboAnyTop(4);
+  if (big4Top && nEnt >= 5) awards.push({ emoji: "🧮", title: "The Big Four", members: membersOf(big4Top.key), detail: `${fmtU(big4Top.v)} of categorized spend together`, score: 15 + big4Top.v / totalSpend });
+  const coreTrio = top(st.trioOnly, 1);
+  if (coreTrio && nEnt >= 4) awards.push({ emoji: "👨‍👦‍👦", title: "Core Trio", members: membersOf(coreTrio.key), detail: `${coreTrio.v} expenses just the three of them`, score: 13 + Math.min(coreTrio.v / nExp, 1) });
   const catTop = top(st.catTotal);
   const catSquad: Record<string, string> = {
     Food: "The Buffet Battalion", Drinks: "The Liquid Assets", Coffee: "The Bean Counters",
