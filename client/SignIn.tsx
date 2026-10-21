@@ -13,7 +13,7 @@ export function SignIn({ onSignedIn, compact }: { onSignedIn: () => void; compac
     if (!email.includes("@")) { setErr("Enter a valid email"); return; }
     setBusy(true); setErr("");
     try {
-      await api.post("/api/auth/email", { email: email.trim() });
+      await api.call("POST /api/auth/email", { email: email.trim() });
       setSent(true);
     } catch (e) { setErr(e instanceof Error ? e.message : "send failed"); }
     setBusy(false);
@@ -22,11 +22,14 @@ export function SignIn({ onSignedIn, compact }: { onSignedIn: () => void; compac
   const verify = async () => {
     setBusy(true); setErr("");
     try {
-      await api.post("/api/auth/email/verify", { email: email.trim(), code: code.trim() });
-      onSignedIn();
+      const failure = await api.call("POST /api/auth/email/verify", { email: email.trim(), code: code.trim() }, {
+        wrong_code: () => "Wrong code — check the email",
+        code_expired: () => "Code expired — send a new one",
+      });
+      if (typeof failure === "string") setErr(failure);
+      else onSignedIn();
     } catch (e) {
-      const m = e instanceof Error ? e.message : "verify failed";
-      setErr(m === "wrong_code" ? "Wrong code — check the email" : m === "code_expired" ? "Code expired — send a new one" : m);
+      setErr(e instanceof Error ? e.message : "verify failed");
     }
     setBusy(false);
   };

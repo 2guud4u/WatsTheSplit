@@ -1,4 +1,5 @@
 import { db, stmt } from "./db.ts";
+import type { ErrorCode } from "../shared/wire.ts";
 import { decimals, isCurrency, CURRENCIES } from "./currencies.ts";
 import { crossRate, latestProviderTimestamp } from "./fx.ts";
 import { effectiveShares, expensePayload, tripBalances, journeyBalance, journeyTrips, journeyPeople, loadTripRows, loadJourneyRows, type JourneyMember } from "./ledger.ts";
@@ -32,7 +33,7 @@ const json = (data: unknown, init: ResponseInit = {}) =>
     ...init,
     headers: { "content-type": "application/json", ...(init.headers ?? {}) },
   });
-const err = (status: number, error: string, extra: object = {}) =>
+const err = (status: number, error: ErrorCode, extra: object = {}) =>
   json({ error, ...extra }, { status });
 const now = () => new Date().toISOString();
 

@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { api, BASE, toMinor, fmt, decimals, CATEGORIES, CURRENCY_COUNTRIES } from "./api.ts";
+import { api } from "./api.ts";
+import { toMinor, fmt, decimals, CATEGORIES, CURRENCY_COUNTRIES } from "./format.ts";
 import { CurrencyPicker } from "./CurrencyPicker.tsx";
 import { useTripEvents } from "./hooks.ts";
 
@@ -79,7 +80,7 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
   const [itemDraft, setItemDraft] = useState({ name: "", price: "", sharers: [] as string[] });
 
   const load = useCallback(async () => {
-    try { setData(await api.get(`/api/expenses/${expenseId}`)); }
+    try { setData(await api.call("GET /api/expenses/:expense", { expense: expenseId })); }
     catch { location.hash = `#/t/${token}`; }
   }, [expenseId, token]);
 
@@ -92,7 +93,7 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
   const dec = decimals(e.currency);
   const partIds = new Set((e.participants ?? []).map((p) => p.member_id));
   const readOnly = data.access === "view";
-  const patch = (b: object) => api.patch(`/api/expenses/${e.id}`, b).then(load);
+  const patch = (b: object) => api.call("PATCH /api/expenses/:expense", { expense: e.id, ...b }).then(load);
   const slices = (e.effective_shares ?? [])
     .filter((s) => (s.minor ?? 0) > 0)
     .map((s, i) => ({
@@ -166,7 +167,7 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
             <label key={m.id} className="member-chip" style={{ cursor: "pointer" }}>
               <input type="checkbox" checked={partIds.has(m.id)}
                 onChange={async (ev) => {
-                  await api.put(`/api/expenses/${e.id}/participants`, { member_id: m.id, on: ev.target.checked });
+                  await api.call("PUT /api/expenses/:expense/participants", { expense: e.id, member_id: m.id, on: ev.target.checked });
                   load();
                 }} />
               {m.name}
@@ -214,7 +215,8 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
                   : "0"}
                 onBlur={async (ev) => {
                   const v = ev.target.value;
-                  await api.put(`/api/expenses/${e.id}/shares`, {
+                  await api.call("PUT /api/expenses/:expense/shares", {
+                    expense: e.id,
                     member_id: p.member_id,
                     share_minor: v === "" ? null : toMinor(v, e.currency),
                   });
@@ -226,7 +228,7 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
                   disabled={!canToggle}
                   title={canToggle ? (p.paid ? "mark unpaid" : "mark paid") : "only the payer or this person can toggle"}
                   onClick={async () => {
-                    await api.put(`/api/expenses/${e.id}/paid`, { member_id: p.member_id, paid: !p.paid });
+                    await api.call("PUT /api/expenses/:expense/paid", { expense: e.id, member_id: p.member_id, paid: !p.paid });
                     load();
                   }}>
                   {p.paid ? "✓ paid" : "paid"}
@@ -236,10 +238,10 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
           );
         })}
         <div className="row" style={{ marginTop: 8 }}>
-          <button onClick={async () => { await api.post(`/api/expenses/${e.id}/split`, { type: "equal_rest" }); load(); }}>
+          <button onClick={async () => { await api.call("POST /api/expenses/:expense/split", { expense: e.id, type: "equal_rest" }); load(); }}>
             Split unassigned equally
           </button>
-          <button onClick={async () => { await api.post(`/api/expenses/${e.id}/split`, { type: "proportional" }); load(); }}>
+          <button onClick={async () => { await api.call("POST /api/expenses/:expense/split", { expense: e.id, type: "proportional" }); load(); }}>
             Spread unassigned proportionally
           </button>
         </div>
@@ -249,10 +251,10 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
           <div key={it.id} className="item-row" style={{ alignItems: "flex-start" }}>
             <input className="wide" defaultValue={it.name} key={it.id + "n"}
               onBlur={async (ev) => ev.target.value !== it.name &&
-                (await api.patch(`/api/items/${it.id}`, { name: ev.target.value }), load())} />
+                (await api.call("PATCH /api/items/:item", { item: it.id, name: ev.target.value }), load())} />
             <input className="money" inputMode="decimal" defaultValue={String(it.price_minor / 10 ** dec)} key={it.id + "p"}
               onBlur={async (ev) => {
-                await api.patch(`/api/items/${it.id}`, { price_minor: toMinor(ev.target.value, e.currency) });
+                await api.call("PATCH /api/items/:item", { item: it.id, price_minor: toMinor(ev.target.value, e.currency) });
                 load();
               }} />
             <span className="sharer-checks">
@@ -263,13 +265,13 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
                       const sharers = ev.target.checked
                         ? [...it.sharers, m.id]
                         : it.sharers.filter((x) => x !== m.id);
-                      await api.patch(`/api/items/${it.id}`, { sharers });
+                      await api.call("PATCH /api/items/:item", { item: it.id, sharers });
                       load();
                     }} /> {m.name}
                 </label>
               ))}
             </span>
-            <button className="link danger" onClick={async () => { await api.del(`/api/items/${it.id}`); load(); }}>✕</button>
+            <button className="link danger" onClick={async () => { await api.call("DELETE /api/items/:item", { item: it.id }); load(); }}>✕</button>
           </div>
         ))}
         <div className="item-row">
@@ -279,7 +281,8 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
             onChange={(ev) => setItemDraft({ ...itemDraft, price: ev.target.value })} />
           <button className="primary" disabled={!itemDraft.name.trim() || !itemDraft.price}
             onClick={async () => {
-              await api.post(`/api/expenses/${e.id}/items`, {
+              await api.call("POST /api/expenses/:expense/items", {
+                expense: e.id,
                 name: itemDraft.name.trim(),
                 price_minor: toMinor(itemDraft.price, e.currency),
                 sharers: itemDraft.sharers,
@@ -315,7 +318,7 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
                 const f = ev.target.files?.[0];
                 ev.target.value = "";
                 if (!f) return;
-                await api.upload(`/api/expenses/${e.id}/photos`, f);
+                await api.call("POST /api/expenses/:expense/photos", { expense: e.id, file: f });
                 load();
               }} />
           </label>
@@ -324,11 +327,11 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
         <div className="photo-grid">
           {(e.photos ?? []).map((id) => (
             <div key={id} className="photo-cell">
-              <a href={`${BASE}/api/photos/${id}`} target="_blank" rel="noreferrer">
-                <img src={`${BASE}/api/photos/${id}`} alt="expense photo" />
+              <a href={api.href("GET /api/photos/:photo", { photo: id })} target="_blank" rel="noreferrer">
+                <img src={api.href("GET /api/photos/:photo", { photo: id })} alt="expense photo" />
               </a>
               <button className="link danger photo-del"
-                onClick={async () => { await api.del(`/api/photos/${id}`); load(); }}>✕</button>
+                onClick={async () => { await api.call("DELETE /api/photos/:photo", { photo: id }); load(); }}>✕</button>
             </div>
           ))}
         </div>
@@ -339,7 +342,7 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
       {data.access === "edit" && (
         <button className="danger" onClick={async () => {
           if (!confirm(`Delete "${e.name}"? This cannot be undone.`)) return;
-          await api.del(`/api/expenses/${e.id}`);
+          await api.call("DELETE /api/expenses/:expense", { expense: e.id });
           location.hash = `#/t/${token}`;
         }}>Delete expense</button>
       )}

@@ -1,41 +1,13 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { api, BASE, fmtUnits, fmt, flag, decimals } from "./api.ts";
+import { api, BASE } from "./api.ts";
+import type { JourneyView as JourneyData, JourneyTrip as JTrip, JourneyMemberRow as JMember, Transfer } from "./api.ts";
+import { fmtUnits, fmt, flag, decimals } from "./format.ts";
 import { useTripEvents } from "./hooks.ts";
 import { ShareLink } from "./ShareLink.tsx";
 import { Avatar, OweCard } from "./OweCard.tsx";
 import { SignInButton } from "./SignIn.tsx";
 
 import { Awards } from "./Awards.tsx";
-type TripRef = { token: string; name: string; settle_currency?: string };
-type ExpenseSum = {
-  id: string; name: string; currency: string; total_minor: number;
-  unassigned_minor: number; over: boolean; paid_out: number; category: string | null;
-};
-type JTrip = TripRef & {
-  access: "edit" | "view";
-  members: { id: string; name: string; linked: boolean; opted_out_fun: boolean }[];
-  expenses: ExpenseSum[];
-};
-type Person = { key: string; name: string; memberIds: string[]; linked: boolean };
-type JMember = { id: string; name: string; trip_name: string; key: string; linked: boolean; opted_out_fun: boolean };
-type JourneyData = {
-  journey: { token: string; name: string; settle_currency: string; fun_leaderboard: boolean };
-  signed_in: boolean;
-  wrapped_at: string | null;
-  fun: { awards: { emoji: string; title: string; members: string[]; detail: string }[] } | null;
-  trips: JTrip[];
-  persons: Person[];
-  members: JMember[];
-  mergeHints: { name: string; member_ids: string[]; trips: string[] }[];
-  transfers: Transfer[];
-  my_member_ids: string[];
-  mergeableTrips: (TripRef & { settle_currency: string })[];
-};
-type TransferPart = {
-  trip_token: string; trip_name: string; from_member: string; to_member: string;
-  amount: number; against: boolean;
-};
-type Transfer = { from: string; to: string; amount: number; from_key: string; to_key: string; parts: TransferPart[] };
 
 export default function JourneyView({ token, reloadMe }: { token: string; reloadMe: () => void }) {
   const [data, setData] = useState<JourneyData | null>(null);
@@ -49,7 +21,7 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
     !localStorage.getItem(`wts_fun_notice_j${token}`));
 
   const load = useCallback(async () => {
-    try { setData(await api.get(`/api/journeys/${token}`)); setErr(""); }
+    try { setData(await api.call("GET /api/journeys/:journey", { journey: token })); setErr(""); }
     catch (e) { setErr(e instanceof Error ? e.message : "error"); }
   }, [token]);
 
@@ -71,7 +43,7 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
           <p className="muted">This journey link lets you view every trip in it and add yourself to the ones you joined.</p>
           <div className="row">
             <button className="primary" onClick={async () => {
-              await api.post(`/api/journeys/${token}/join`);
+              await api.call("POST /api/journeys/:journey/join", { journey: token });
               load();
             }}>Open journey</button>
             <SignInButton label="Already in a trip? Sign in" onSignedIn={() => { reloadMe(); load(); }} />
@@ -89,20 +61,20 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
   const allHidden = myMembers.length > 0 && myMembers.every((m) => m.opted_out_fun);
 
   const merge = async (ids: string[]) => {
-    try { await api.post(`/api/journeys/${j.token}/merge`, { member_ids: ids }); load(); }
+    try { await api.call("POST /api/journeys/:journey/merge", { journey: j.token, member_ids: ids }); load(); }
     catch (e) { setErr(e instanceof Error ? e.message : "error"); }
   };
   const unmerge = async (memberId: string) => {
-    await api.del(`/api/journeys/${j.token}/merge/${memberId}`); load();
+    await api.call("DELETE /api/journeys/:journey/merge/:member", { journey: j.token, member: memberId }); load();
   };
   const removeTrip = async (tt: string) => {
-    await api.del(`/api/journeys/${j.token}/trips/${tt}`); load();
+    await api.call("DELETE /api/journeys/:journey/trips/:trip", { journey: j.token, trip: tt }); load();
   };
   const addTrip = async (tt: string) => {
-    await api.post(`/api/journeys/${j.token}/trips`, { trip_token: tt }); setAddOpen(false); load();
+    await api.call("POST /api/journeys/:journey/trips", { journey: j.token, trip_token: tt }); setAddOpen(false); load();
   };
   const claimIn = async (tripToken: string, memberId: string) => {
-    await api.post(`/api/trips/${tripToken}/claim`, { member_id: memberId }); load();
+    await api.call("POST /api/trips/:trip/claim", { trip: tripToken, member_id: memberId }); load();
   };
 
   // group members by merge key for the people panel
@@ -156,7 +128,7 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
               : <button className="link" onClick={async () => {
                   // one click hides the viewer everywhere: every claimed member
                   for (const m of myMembers)
-                    await api.patch(`/api/members/${m.id}`, { opted_out_fun: true });
+                    await api.call("PATCH /api/members/:member", { member: m.id, opted_out_fun: true });
                   load();
                 }}>hide me from awards</button>}
             <button className="link" onClick={() => {
@@ -198,7 +170,7 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
                   <button className="link" onClick={async () => {
                     const name = prompt("Your name for this trip:");
                     if (!name?.trim()) return;
-                    try { await api.post(`/api/trips/${t.token}/claim`, { name: name.trim() }); load(); }
+                    try { await api.call("POST /api/trips/:trip/claim", { trip: t.token, name: name.trim() }); load(); }
                     catch { alert("Name taken — pick another."); }
                   }}>+ new name</button>
                 </div>
@@ -344,8 +316,8 @@ function MarkPaidModal({ transfer, currency, trips, onClose, onDone }: {
       for (const p of chosen) {
         const minor = Math.round(p.amount * 10 ** decimals(currency));
         if (minor <= 0) continue;
-        await api.post(`/api/trips/${p.trip_token}/settlements`, {
-          from_member: p.from_member, to_member: p.to_member, amount_minor: minor,
+        await api.call("POST /api/trips/:trip/settlements", {
+          trip: p.trip_token, from_member: p.from_member, to_member: p.to_member, amount_minor: minor,
         });
       }
       onDone();
@@ -405,7 +377,7 @@ function JourneySettings({ data, load, setShow }: {
         <label className="field-label">Name</label>
         <input className="wide" defaultValue={j.name} onBlur={async (e) => {
           if (e.target.value.trim() && e.target.value !== j.name) {
-            await api.patch(`/api/journeys/${j.token}/settings`, { name: e.target.value.trim() });
+            await api.call("PATCH /api/journeys/:journey/settings", { journey: j.token, name: e.target.value.trim() });
             load();
           }
         }} />
@@ -419,7 +391,7 @@ function JourneySettings({ data, load, setShow }: {
         <label className="field-label">🎁 Journey Wrapped</label>
         <label className="member-chip" style={{ cursor: "pointer" }}>
           <input type="checkbox" checked={j.fun_leaderboard} onChange={async (e) => {
-            await api.patch(`/api/journeys/${j.token}/settings`, { fun_leaderboard: e.target.checked });
+            await api.call("PATCH /api/journeys/:journey/settings", { journey: j.token, fun_leaderboard: e.target.checked });
             load();
           }} />
           Show the Journey Wrapped tab with silly awards
@@ -432,7 +404,7 @@ function JourneySettings({ data, load, setShow }: {
           <input value={delName} placeholder={`Type "${j.name}" to dissolve`}
             onChange={(e) => setDelName(e.target.value)} />
           <button className="danger" disabled={delName !== j.name} onClick={async () => {
-            await api.del(`/api/journeys/${j.token}`, { name: delName });
+            await api.call("DELETE /api/journeys/:journey", { journey: j.token, name: delName });
             location.hash = "#/";
           }}>Dissolve journey</button>
         </div>

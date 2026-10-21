@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
-import { api, BASE, Config, toMinor, fmt, fmtUnits, decimals, flag, CATEGORIES } from "./api.ts";
+import { api, BASE, Config } from "./api.ts";
+import { toMinor, fmt, fmtUnits, decimals, flag, CATEGORIES } from "./format.ts";
 import { addRecent } from "./main.tsx";
 import { CurrencyPicker } from "./CurrencyPicker.tsx";
 import { Avatar, OweCard, memberName } from "./OweCard.tsx";
@@ -81,16 +82,14 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
   const [settleFrom, settleTo] = [settle.from, settle.to];
 
   const load = useCallback(async () => {
-    try {
-      const d = await api.get(`/api/trips/${token}`);
-      setData(d);
-      setNeedsPassword(false);
-      addRecent(token, d.trip.name);
-      if (d.trip && expCur === null) setExpCur(d.trip.trip_currency);
-    } catch (e) {
-      const err = e as { status?: number; data?: { error?: string } };
-      if (err.status === 401 && err.data?.error === "password_required") setNeedsPassword(true);
-    }
+    const d = await api.call("GET /api/trips/:trip", { trip: token }, { password_required: () => "locked" as const })
+      .catch(() => null);
+    if (d === "locked") { setNeedsPassword(true); return; }
+    if (!d) return;
+    setData(d);
+    setNeedsPassword(false);
+    addRecent(token, d.trip.name);
+    if (d.trip && expCur === null) setExpCur(d.trip.trip_currency);
   }, [token]);
 
   useEffect(() => {
@@ -102,7 +101,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
       if (m) {
         const pw = decodeURIComponent(m[1]);
         history.replaceState(null, "", location.pathname + location.search + location.hash.replace(/\?pw=[^&]*/, ""));
-        await api.post(`/api/trips/${token}/password`, { password: pw }).catch(() => {});
+        await api.call("POST /api/trips/:trip/password", { trip: token, password: pw }).catch(() => {});
       }
       load();
     })();
@@ -123,10 +122,10 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
               onChange={(e) => setPassword(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && document.getElementById("pwgo")?.click()} />
             <button id="pwgo" className="primary" onClick={async () => {
-              try {
-                await api.post(`/api/trips/${token}/password`, { password });
-                setNeedsPassword(false); load();
-              } catch { setPwErr("Wrong password"); }
+              const r = await api.call("POST /api/trips/:trip/password", { trip: token, password }, { wrong_password: () => "bad" as const })
+                .catch(() => "bad" as const);
+              if (r === "bad") setPwErr("Wrong password");
+              else { setNeedsPassword(false); load(); }
             }}>Open</button>
           </div>
           {pwErr && <div className="error">{pwErr}</div>}
@@ -156,7 +155,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
         {data.members.map((m) => (
           <button key={m.id} className="member-chip"
             disabled={m.linked && !data.signed_in}
-            onClick={async () => { await api.post(`/api/trips/${token}/claim`, { member_id: m.id }); load(); }}>
+            onClick={async () => { await api.call("POST /api/trips/:trip/claim", { trip: token, member_id: m.id }); load(); }}>
             <Avatar name={m.name} />{m.name}{m.linked && <span className="pill">🔒</span>}
           </button>
         ))}
@@ -165,7 +164,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
         <input className="wide" value={newName} placeholder="Your name"
           onChange={(e) => setNewName(e.target.value)} />
         <button className="primary" disabled={!newName.trim()} onClick={async () => {
-          await api.post(`/api/trips/${token}/claim`, { name: newName.trim() });
+          await api.call("POST /api/trips/:trip/claim", { trip: token, name: newName.trim() });
           setNewName(""); load();
         }}>Join as new</button>
       </div>
@@ -191,7 +190,8 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
 
   const createExpense = async () => {
     if (!expName.trim() || !expTotal) return;
-    const r = await api.post(`/api/trips/${token}/expenses`, {
+    const r = await api.call("POST /api/trips/:trip/expenses", {
+      trip: token,
       name: expName.trim(), total_minor: toMinor(expTotal, expCur ?? t.trip_currency),
       currency: expCur ?? t.trip_currency,
       payer_member_id: expPayer || me?.id,
@@ -250,7 +250,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
             {me?.opted_out_fun
               ? <span className="pill">you're hidden from awards</span>
               : <button className="link" onClick={async () => {
-                  await api.patch(`/api/members/${me?.id}`, { opted_out_fun: true });
+                  await api.call("PATCH /api/members/:member", { member: me!.id, opted_out_fun: true });
                   load();
                 }}>hide me from awards</button>}
             <button className="link" onClick={() => {
@@ -275,7 +275,8 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
         const youOwe = data.balances.filter((p) => p.from === me?.id);
         const others = data.balances.filter((p) => p.from !== me?.id && p.to !== me?.id);
         const markPaid = async (p: { from: string; to: string; amount: number }) => {
-          await api.post(`/api/trips/${token}/settlements`, {
+          await api.call("POST /api/trips/:trip/settlements", {
+            trip: token,
             from_member: p.from, to_member: p.to,
             amount_minor: Math.round(p.amount * 10 ** decimals(t.settle_currency)),
           });
@@ -297,7 +298,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
                 onConfirm={readOnly ? undefined : async () => { await markPaid(p); }}
                 onDetails={entries.length ? () => {
                   setMathOpen(true);
-                  api.post(`/api/trips/${token}/detail-view`).catch(() => {});
+                  api.call("POST /api/trips/:trip/detail-view", { trip: token }).catch(() => {});
                 } : undefined} />
               {mathOpen && (
                 <div className="modal-bg" onClick={() => setMathOpen(false)}>
@@ -400,7 +401,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
                   <span>{memberName(data.members, s.from_member)} paid {memberName(data.members, s.to_member)}</span>
                   <span>{fmt(s.amount_minor, t.settle_currency)}
                     {!readOnly && <button className="link danger" onClick={async () => {
-                      await api.del(`/api/settlements/${s.id}`);
+                      await api.call("DELETE /api/settlements/:settlement", { settlement: s.id });
                     }}>✕</button>}
                   </span>
                 </div>
@@ -425,7 +426,8 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
               <span className="muted">{t.settle_currency}</span>
               <button className="primary" disabled={!settleFrom || !settleTo || settleFrom === settleTo || !settle.amount}
                 onClick={async () => {
-                  await api.post(`/api/trips/${token}/settlements`, {
+                  await api.call("POST /api/trips/:trip/settlements", {
+                    trip: token,
                     from_member: settleFrom, to_member: settleTo,
                     amount_minor: toMinor(settle.amount, t.settle_currency),
                   });
@@ -514,7 +516,7 @@ function Settings({ data, token, currencies, reload, setShow }: {
       <div className="field">
         <label className="field-label">Name</label>
         <input className="wide" defaultValue={t.name} onBlur={async (e) => {
-          if (e.target.value !== t.name) { await api.patch(`/api/trips/${token}/settings`, { name: e.target.value }); reload(); }
+          if (e.target.value !== t.name) { await api.call("PATCH /api/trips/:trip/settings", { trip: token, name: e.target.value }); reload(); }
         }} />
       </div>
       <div className="field"><label className="field-label">Dates</label>
@@ -533,7 +535,7 @@ function Settings({ data, token, currencies, reload, setShow }: {
         {data.is_creator ? (
           <label className="member-chip" style={{ cursor: "pointer" }}>
             <input type="checkbox" checked={t.fun_leaderboard} onChange={async (e) => {
-              await api.patch(`/api/trips/${token}/settings`, { fun_leaderboard: e.target.checked });
+              await api.call("PATCH /api/trips/:trip/settings", { trip: token, fun_leaderboard: e.target.checked });
               reload();
             }} />
             Show the Trip Wrapped tab with silly awards
@@ -549,7 +551,7 @@ function Settings({ data, token, currencies, reload, setShow }: {
           <input type="password" value={pw} placeholder="New trip password"
             onChange={(e) => setPw(e.target.value)} />
           <button disabled={!pw} onClick={async () => {
-            await api.patch(`/api/trips/${token}/settings`, { password: pw });
+            await api.call("PATCH /api/trips/:trip/settings", { trip: token, password: pw });
             setPw(""); reload();
           }}>Change</button>
         </div>
@@ -563,7 +565,7 @@ function Settings({ data, token, currencies, reload, setShow }: {
             <span>{m.name} {m.linked && <span className="pill">🔒 linked</span>} {m.is_me && <span className="pill">(you)</span>}</span>
             {!m.used && !m.is_me && (
               <button className="link danger" onClick={async () => {
-                await api.del(`/api/members/${m.id}`); reload();
+                await api.call("DELETE /api/members/:member", { member: m.id }); reload();
               }}>remove</button>
             )}
           </div>
@@ -572,7 +574,7 @@ function Settings({ data, token, currencies, reload, setShow }: {
           <input className="wide" value={newMember} placeholder="Add a placeholder member"
             onChange={(e) => setNewMember(e.target.value)} />
           <button disabled={!newMember.trim()} onClick={async () => {
-            await api.post(`/api/trips/${token}/members`, { name: newMember.trim() });
+            await api.call("POST /api/trips/:trip/members", { trip: token, name: newMember.trim() });
             setNewMember(""); reload();
           }}>Add</button>
         </div>
@@ -584,7 +586,7 @@ function Settings({ data, token, currencies, reload, setShow }: {
           <input value={delName} placeholder={`Type "${t.name}" to delete`}
             onChange={(e) => setDelName(e.target.value)} />
           <button className="danger" disabled={delName !== t.name} onClick={async () => {
-            await api.del(`/api/trips/${token}`, { name: delName });
+            await api.call("DELETE /api/trips/:trip", { trip: token, name: delName });
             location.hash = "#/";
           }}>Delete trip</button>
         </div>
@@ -597,7 +599,8 @@ function SettingsDates({ t, token, reload }: { t: { start_date: string | null; e
   const parse = (s: string | null) => (s ? new Date(s + "T00:00:00") : undefined);
   const [range, setRange] = useState<DateRange | undefined>({ from: parse(t.start_date), to: parse(t.end_date) });
   const save = async (r: DateRange | undefined) => {
-    await api.patch(`/api/trips/${token}/settings`, {
+    await api.call("PATCH /api/trips/:trip/settings", {
+      trip: token,
       start_date: r?.from ? r.from.toISOString().slice(0, 10) : null,
       end_date: r?.to ? r.to.toISOString().slice(0, 10) : null,
     });

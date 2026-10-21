@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { fmtUnits } from "./api.ts";
+import { fmtUnits } from "./format.ts";
 
 const AVATAR_COLORS = ["#b56a4c","#7a9b6d","#c9a25e","#8f7fae","#b07575","#7d9aa8","#c9b458","#a08a6e","#6d7f9e"];
 export function Avatar({ name }: { name: string }) {

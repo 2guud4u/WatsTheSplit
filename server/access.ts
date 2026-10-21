@@ -1,6 +1,7 @@
 import { db, stmt } from "./db.ts";
 import { journeyTrips } from "./ledger.ts";
 import type { Session, Member, Trip, Journey } from "./types.ts";
+import type { ErrorCode } from "../shared/wire.ts";
 
 // ---------- sessions ----------
 // handle() resolves the session once and passes it to the route — handlers
@@ -135,7 +136,7 @@ const entityTripToken: Record<EntityKind, (id: string) => string | null> = {
   settlement: childTrip("SELECT trip_token FROM settlements WHERE id = ?"),
 };
 
-const notFoundFor: Record<EntityKind, [number, string]> = {
+const notFoundFor: Record<EntityKind, [number, ErrorCode]> = {
   trip: [404, "trip_not_found"],
   expense: [404, "expense_not_found"],
   item: [404, "item_not_found"],
@@ -146,7 +147,7 @@ const notFoundFor: Record<EntityKind, [number, string]> = {
 
 const json = (data: unknown, init: ResponseInit = {}) =>
   new Response(JSON.stringify(data), { ...init, headers: { "content-type": "application/json", ...(init.headers ?? {}) } });
-const err = (status: number, error: string, extra: object = {}) => json({ error, ...extra }, { status });
+const err = (status: number, error: ErrorCode, extra: object = {}) => json({ error, ...extra }, { status });
 
 export function resolveTrip(s: Session, ref: EntityRef, tier: "view" | "edit"): TripAccess | Response {
   const kind = Object.keys(ref)[0] as EntityKind;

@@ -11,5 +11,5 @@
     "types": ["bun-types", "vite/client"],
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
-  "include": ["server", "client", "vite.config.ts"]
+  "include": ["server", "client", "shared", "vite.config.ts"]
 }

@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { createRoot } from "react-dom/client";
-import { api, Config, flag } from "./api.ts";
+import { api, Config } from "./api.ts";
+import { flag } from "./format.ts";
 import TripView from "./Trip.tsx";
 import ExpenseView from "./Expense.tsx";
 import { CurrencyPicker } from "./CurrencyPicker.tsx";
@@ -46,12 +47,12 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
 
   const openJourneyModal = async () => {
     setShowJourney(true);
-    const r = await api.get("/api/accessible-trips");
-    setJTrips(r.trips.filter((t: { journey: unknown }) => !t.journey));
+    const r = await api.call("GET /api/accessible-trips", {});
+    setJTrips(r.trips.filter((t) => !t.journey));
   };
   const createJourney = async () => {
     try {
-      const r = await api.post("/api/journeys", {
+      const r = await api.call("POST /api/journeys", {
         name: jName, trip_tokens: [...jPicked],
       });
       location.hash = `#/j/${r.token}`;
@@ -60,13 +61,13 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
 
   const openCreateModal = () => {
     setShowCreate(true);
-    api.get("/api/member-suggestions").then((r) => setSuggestions(r.suggestions)).catch(() => {});
+    api.call("GET /api/member-suggestions", {}).then((r) => setSuggestions(r.suggestions)).catch(() => {});
   };
   const currencies = config?.currencies ?? [];
 
   const create = async () => {
     try {
-      const r = await api.post("/api/trips", {
+      const r = await api.call("POST /api/trips", {
         name,
         start_date: range?.from ? range.from.toISOString().slice(0, 10) : null,
         end_date: range?.to ? range.to.toISOString().slice(0, 10) : null,
@@ -93,7 +94,7 @@ function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadM
           {me.user ? (
             <>
               <span>Signed in as <b>{me.user.name || me.user.email}</b></span>
-              <button className="link" onClick={async () => { await api.post("/api/auth/signout"); reloadMe(); }}>Sign out</button>
+              <button className="link" onClick={async () => { await api.call("POST /api/auth/signout", {}); reloadMe(); }}>Sign out</button>
             </>
           ) : (
             <>
@@ -280,8 +281,8 @@ function RecentTrips({ me }: { me: Me }) {
   const [myTrips, setMyTrips] = useState<{ token: string; name: string }[]>([]);
   const [myJourneys, setMyJourneys] = useState<{ token: string; name: string }[]>([]);
   useEffect(() => {
-    api.get("/api/my-journeys").then((r) => setMyJourneys(r.journeys)).catch(() => {});
-    if (me.user) api.get("/api/my-trips").then((r) => setMyTrips(r.trips));
+    api.call("GET /api/my-journeys", {}).then((r) => setMyJourneys(r.journeys)).catch(() => {});
+    if (me.user) api.call("GET /api/my-trips", {}).then((r) => setMyTrips(r.trips));
   }, [me.user]);
   const recent = getRecent();
   return (
@@ -331,12 +332,12 @@ function App() {
   const [path, setPath] = useState(route());
   const [config, setConfig] = useState<Config | null>(null);
   const [me, setMe] = useState<Me>({ user: null });
-  const reloadMe = useCallback(() => { api.get("/api/me").then(setMe); }, []);
+  const reloadMe = useCallback(() => { api.call("GET /api/me", {}).then(setMe); }, []);
 
   useEffect(() => {
     const onHash = () => setPath(route());
     addEventListener("hashchange", onHash);
-    api.get("/api/config").then(setConfig);
+    api.call("GET /api/config", {}).then(setConfig);
     reloadMe();
     return () => removeEventListener("hashchange", onHash);
   }, []);
