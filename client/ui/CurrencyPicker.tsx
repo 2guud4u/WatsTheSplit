@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { flag, CURRENCY_COUNTRIES } from "./format.ts";
+import { flag, CURRENCY_COUNTRIES } from "../format.ts";
 
 // Searchable currency select: matches code or country name.
 export function CurrencyPicker({ value, options, onChange, placeholder = "— pick —" }: {

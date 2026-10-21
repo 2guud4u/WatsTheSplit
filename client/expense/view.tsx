@@ -1,29 +1,9 @@
-import React, { useEffect, useState, useCallback } from "react";
-import { api } from "./api.ts";
-import { toMinor, fmt, decimals, CATEGORIES, CURRENCY_COUNTRIES } from "./format.ts";
-import { CurrencyPicker } from "./CurrencyPicker.tsx";
-import { useTripEvents } from "./hooks.ts";
-
-type Member = { id: string; name: string };
-type Item = { id: string; name: string; price_minor: number; sharers: string[] };
-type Expense = {
-  id: string; name: string; currency: string; total_minor: number;
-  payer_member_id: string | null; category: string | null;
-  rate: number | null; rate_provider: string | null; rate_timestamp: string | null;
-  recorded_at: string; last_edited_by: string | null; last_edited_at: string;
-  assigned_minor: number; unassigned_minor: number; over: boolean; paid_out?: boolean;
-  participants?: { member_id: string; share_minor: number | null; name: string; paid?: number }[];
-  items?: Item[];
-  effective_shares?: { member_id: string; minor: number | null }[];
-  photos?: string[];
-};
-type Data = {
-  expense: Expense;
-  trip: { token: string; name: string; settle_currency: string };
-  access: "edit" | "view";
-  members: Member[];
-  me: string | null;
-};
+import React, { useEffect, useState } from "react";
+import { api } from "../api.ts";
+import type { ExpenseView as ExpenseData } from "../api.ts";
+import { toMinor, fmt, decimals, CATEGORIES, CURRENCY_COUNTRIES } from "../format.ts";
+import { CurrencyPicker } from "../ui/CurrencyPicker.tsx";
+import { useExpense } from "./model.ts";
 
 const COLORS = ["#b56a4c","#7a9b6d","#c9a25e","#8f7fae","#b07575","#7d9aa8","#c9b458","#a08a6e"];
 function Pie({ slices, total }: { slices: { label: string; value: number; i: number }[]; total: number }) {
@@ -76,16 +56,8 @@ function PieLegend({ slices, unassigned, currency, members }: {
 }
 
 export default function ExpenseView({ token, expenseId }: { token: string; expenseId: string }) {
-  const [data, setData] = useState<Data | null>(null);
+  const { data, load, actions } = useExpense(token, expenseId);
   const [itemDraft, setItemDraft] = useState({ name: "", price: "", sharers: [] as string[] });
-
-  const load = useCallback(async () => {
-    try { setData(await api.call("GET /api/expenses/:expense", { expense: expenseId })); }
-    catch { location.hash = `#/t/${token}`; }
-  }, [expenseId, token]);
-
-  useEffect(() => { load(); }, [load]);
-  useTripEvents([token], load);
 
   if (!data) return <p className="muted">Loading…</p>;
   const e = data.expense;
@@ -93,7 +65,7 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
   const dec = decimals(e.currency);
   const partIds = new Set((e.participants ?? []).map((p) => p.member_id));
   const readOnly = data.access === "view";
-  const patch = (b: object) => api.call("PATCH /api/expenses/:expense", { expense: e.id, ...b }).then(load);
+  const patch = actions.patch;
   const slices = (e.effective_shares ?? [])
     .filter((s) => (s.minor ?? 0) > 0)
     .map((s, i) => ({
@@ -167,8 +139,7 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
             <label key={m.id} className="member-chip" style={{ cursor: "pointer" }}>
               <input type="checkbox" checked={partIds.has(m.id)}
                 onChange={async (ev) => {
-                  await api.call("PUT /api/expenses/:expense/participants", { expense: e.id, member_id: m.id, on: ev.target.checked });
-                  load();
+                  await actions.setParticipant(m.id, ev.target.checked);
                 }} />
               {m.name}
             </label>
@@ -215,12 +186,7 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
                   : "0"}
                 onBlur={async (ev) => {
                   const v = ev.target.value;
-                  await api.call("PUT /api/expenses/:expense/shares", {
-                    expense: e.id,
-                    member_id: p.member_id,
-                    share_minor: v === "" ? null : toMinor(v, e.currency),
-                  });
-                  load();
+                  await actions.setShare(p.member_id, v === "" ? null : toMinor(v, e.currency));
                 }} />
               {!isPayer && (
                 <button
@@ -228,8 +194,7 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
                   disabled={!canToggle}
                   title={canToggle ? (p.paid ? "mark unpaid" : "mark paid") : "only the payer or this person can toggle"}
                   onClick={async () => {
-                    await api.call("PUT /api/expenses/:expense/paid", { expense: e.id, member_id: p.member_id, paid: !p.paid });
-                    load();
+                    await actions.setPaid(p.member_id, !p.paid);
                   }}>
                   {p.paid ? "✓ paid" : "paid"}
                 </button>
@@ -238,10 +203,10 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
           );
         })}
         <div className="row" style={{ marginTop: 8 }}>
-          <button onClick={async () => { await api.call("POST /api/expenses/:expense/split", { expense: e.id, type: "equal_rest" }); load(); }}>
+          <button onClick={async () => { await actions.split({ type: "equal_rest" }); }}>
             Split unassigned equally
           </button>
-          <button onClick={async () => { await api.call("POST /api/expenses/:expense/split", { expense: e.id, type: "proportional" }); load(); }}>
+          <button onClick={async () => { await actions.split({ type: "proportional" }); }}>
             Spread unassigned proportionally
           </button>
         </div>
@@ -251,11 +216,10 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
           <div key={it.id} className="item-row" style={{ alignItems: "flex-start" }}>
             <input className="wide" defaultValue={it.name} key={it.id + "n"}
               onBlur={async (ev) => ev.target.value !== it.name &&
-                (await api.call("PATCH /api/items/:item", { item: it.id, name: ev.target.value }), load())} />
+                (await actions.patchItem(it.id, { name: ev.target.value }))} />
             <input className="money" inputMode="decimal" defaultValue={String(it.price_minor / 10 ** dec)} key={it.id + "p"}
               onBlur={async (ev) => {
-                await api.call("PATCH /api/items/:item", { item: it.id, price_minor: toMinor(ev.target.value, e.currency) });
-                load();
+                await actions.patchItem(it.id, { price_minor: toMinor(ev.target.value, e.currency) });
               }} />
             <span className="sharer-checks">
               {data.members.map((m) => (
@@ -265,13 +229,12 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
                       const sharers = ev.target.checked
                         ? [...it.sharers, m.id]
                         : it.sharers.filter((x) => x !== m.id);
-                      await api.call("PATCH /api/items/:item", { item: it.id, sharers });
-                      load();
+                      await actions.patchItem(it.id, { sharers });
                     }} /> {m.name}
                 </label>
               ))}
             </span>
-            <button className="link danger" onClick={async () => { await api.call("DELETE /api/items/:item", { item: it.id }); load(); }}>✕</button>
+            <button className="link danger" onClick={async () => { await actions.deleteItem(it.id); }}>✕</button>
           </div>
         ))}
         <div className="item-row">
@@ -281,14 +244,12 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
             onChange={(ev) => setItemDraft({ ...itemDraft, price: ev.target.value })} />
           <button className="primary" disabled={!itemDraft.name.trim() || !itemDraft.price}
             onClick={async () => {
-              await api.call("POST /api/expenses/:expense/items", {
-                expense: e.id,
+              await actions.addItem({
                 name: itemDraft.name.trim(),
                 price_minor: toMinor(itemDraft.price, e.currency),
                 sharers: itemDraft.sharers,
               });
               setItemDraft({ name: "", price: "", sharers: [] });
-              load();
             }}>Add item</button>
         </div>
         <div className="sharer-checks" style={{ marginTop: 4 }}>
@@ -318,8 +279,7 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
                 const f = ev.target.files?.[0];
                 ev.target.value = "";
                 if (!f) return;
-                await api.call("POST /api/expenses/:expense/photos", { expense: e.id, file: f });
-                load();
+                await actions.addPhoto(f);
               }} />
           </label>
         </div>
@@ -331,7 +291,7 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
                 <img src={api.href("GET /api/photos/:photo", { photo: id })} alt="expense photo" />
               </a>
               <button className="link danger photo-del"
-                onClick={async () => { await api.call("DELETE /api/photos/:photo", { photo: id }); load(); }}>✕</button>
+                onClick={async () => { await actions.deletePhoto(id); }}>✕</button>
             </div>
           ))}
         </div>
@@ -342,7 +302,7 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
       {data.access === "edit" && (
         <button className="danger" onClick={async () => {
           if (!confirm(`Delete "${e.name}"? This cannot be undone.`)) return;
-          await api.call("DELETE /api/expenses/:expense", { expense: e.id });
+          await actions.destroy();
           location.hash = `#/t/${token}`;
         }}>Delete expense</button>
       )}

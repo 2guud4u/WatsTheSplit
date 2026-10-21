@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { api } from "./api.ts";
+import { api } from "../api.ts";
 
 // Email-code sign-in: type email → we send a 4-char code → type it → signed in.
 export function SignIn({ onSignedIn, compact }: { onSignedIn: () => void; compact?: boolean }) {
