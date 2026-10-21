@@ -68,6 +68,14 @@ check("create trip", !!trip.token, trip);
 // password required at creation
 let r = await bob.post("/api/trips", { name: "x", trip_currency: "USD", settle_currency: "USD" });
 check("create without password rejected", r.status === 400 && r.data.error === "password_required");
+// fun leaderboard needs an end date (unlocks on the end day)
+r = await bob.post("/api/trips", { name: "Undated", trip_currency: "USD", settle_currency: "USD", password: "x" });
+const undated = r.data.token;
+r = await bob.post(`/api/trips/${undated}/password`, { password: "x" });
+r = await bob.patch(`/api/trips/${undated}/settings`, { fun_leaderboard: true });
+check("wrapped enable needs end date", r.status === 400 && r.data.error === "end_date_required");
+r = await bob.patch(`/api/trips/${undated}/settings`, { end_date: "2026-12-01", fun_leaderboard: true });
+check("wrapped enable ok once dated", r.status === 200);
 const T = `/api/trips/${trip.token}`;
 
 r = await alice.get(T);

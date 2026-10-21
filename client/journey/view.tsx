@@ -9,6 +9,7 @@ import { Awards } from "../ui/Awards.tsx";
 import { FunNotice } from "../ui/FunNotice.tsx";
 import { PickChip, SelfChip } from "../ui/Chips.tsx";
 import { PageHead, Tabs } from "../ui/PageHead.tsx";
+import { Review, GiftPrompt, wantsGift, markGiftSeen } from "../ui/Review.tsx";
 import { useJourney } from "./model.ts";
 
 export default function JourneyView({ token, reloadMe }: { token: string; reloadMe: () => void }) {
@@ -18,6 +19,7 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
   const [paying, setPaying] = useState<Transfer | null>(null);
   const [showInvite, setShowInvite] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showReview, setShowReview] = useState(false);
 
   if (err) {
     if (err !== "no_access") return <p className="error">{err}</p>;
@@ -104,7 +106,19 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
         ...(wrappedLive ? [["fun", "🎁 Journey Wrapped"] as const] : []),
       ]} />
 
-      {tab === "fun" && <Awards title="Journey Wrapped" awards={data.fun?.awards ?? null} />}
+      {tab === "fun" && <Awards title="Journey Wrapped" awards={data.fun?.awards ?? null}
+        review={data.fun?.review} currency={cur}
+        onReplay={data.fun?.review ? () => { markGiftSeen(`wts_reviewed_j${token}`); setShowReview(true); } : undefined} />}
+
+      {wrappedLive && wantsGift(`wts_reviewed_j${token}`) && !showReview && (
+        <GiftPrompt title="Journey Wrapped"
+          onOpen={() => { markGiftSeen(`wts_reviewed_j${token}`); setShowReview(true); }} />
+      )}
+      {showReview && data.fun && (
+        <Review title={`${j.name} Wrapped`} subtitle={`${data.trips.length} trip${data.trips.length === 1 ? "" : "s"} in this journey`}
+          review={data.fun.review} awards={data.fun.awards}
+          onClose={() => { setShowReview(false); setTab("fun"); }} />
+      )}
 
       {tab === "trips" && (
         <>

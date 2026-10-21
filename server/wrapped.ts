@@ -1,6 +1,7 @@
 import { decimals } from "./currencies.ts";
 import type { Member } from "./types.ts";
 import { effectiveRate, effectiveShares, journeyPeople, type TripRows, type JourneyRows, type JourneyMember } from "./ledger.ts";
+import type { TripReview } from "../shared/wire.ts";
 
 // Wrapped: silly awards computed from expense data, in settle-currency units.
 // Stats are collected per trip keyed by member id; awards are then built over
@@ -24,7 +25,8 @@ type TripStats = {
   currencies: Record<string, Set<string>>;
   paidTrip: Set<string>;    // paid at least one expense (this trip)
   coveredTrip: Set<string>; // paid an expense someone else shared (this trip)
-  biggestExp: { units: number; sharers: string[] } | null;
+  biggestExp: { name: string; units: number; sharers: string[] } | null;
+  daySpend: Record<string, number>; // "YYYY-MM-DD" -> spend in settle units
   totalSpend: number;
   nExp: number;
 };
@@ -34,8 +36,8 @@ function emptyStats(): TripStats {
     paid: {}, consumed: {}, payerCount: {}, partCount: {}, owed: {},
     createdCount: {}, typedCount: {}, biggestShare: {}, catShare: {},
     catTotal: {}, pairShare: {}, tripleShare: {}, settlePair: {},
-    currencies: {}, paidTrip: new Set(), coveredTrip: new Set(),
-    biggestExp: null, totalSpend: 0, nExp: 0,
+  currencies: {}, paidTrip: new Set(), coveredTrip: new Set(),
+  daySpend: {}, biggestExp: null, totalSpend: 0, nExp: 0,
   };
 }
 
@@ -69,6 +71,7 @@ function collectStats(rows: TripRows): TripStats {
       const units = (s.minor! / 10 ** decimals(e.currency)) * rate;
       add(st.consumed, s.member_id, units);
       st.totalSpend += units;
+      add(st.daySpend, e.recorded_at.slice(0, 10), units);
       add(st.partCount, s.member_id, 1);
       st.biggestShare[s.member_id] = Math.max(st.biggestShare[s.member_id] ?? 0, units);
       (st.currencies[s.member_id] ??= new Set()).add(e.currency);
@@ -79,7 +82,7 @@ function collectStats(rows: TripRows): TripStats {
       }
     }
     if (!st.biggestExp || totalUnits > st.biggestExp.units)
-      st.biggestExp = { units: totalUnits, sharers: sharerIds.filter((id) => !out.has(id)) };
+      st.biggestExp = { name: e.name, units: totalUnits, sharers: sharerIds.filter((id) => !out.has(id)) };
     for (const p of rows.participants[e.id] ?? [])
       if (p.share_minor !== null && !out.has(p.member_id))
         add(st.typedCount, p.member_id, 1);
@@ -126,11 +129,42 @@ function mergeInto(dst: TripStats, src: TripStats, keyOf: (id: string) => string
   for (const id of src.paidTrip) dst.paidTrip.add(keyOf(id));
   for (const id of src.coveredTrip) dst.coveredTrip.add(keyOf(id));
   if (src.biggestExp && (!dst.biggestExp || src.biggestExp.units > dst.biggestExp.units))
-    dst.biggestExp = { units: src.biggestExp.units, sharers: [...new Set(src.biggestExp.sharers.map(keyOf))] };
+    dst.biggestExp = { name: src.biggestExp.name, units: src.biggestExp.units, sharers: [...new Set(src.biggestExp.sharers.map(keyOf))] };
   dst.totalSpend += src.totalSpend;
   dst.nExp += src.nExp;
+  for (const [k, v] of Object.entries(src.daySpend)) add(dst.daySpend, k, v);
 }
 
+
+// The "Trip in Review" stats layer: formatted totals + breakdowns, all in
+// settle-currency units. Entities carry the display names (member names for a
+// trip, person names for a journey).
+function review(st: TripStats, entities: Entity[], fmtU: (v: number) => string): TripReview {
+  const currencies = [...new Set(Object.values(st.currencies).flatMap((s) => [...s]))].sort();
+  const daily = Object.entries(st.daySpend).sort(([a], [b]) => a < b ? -1 : 1)
+    .map(([day, units]) => ({ day, units }));
+  const biggestDay = top(st.daySpend);
+  const members = entities
+    .filter((e) => (st.consumed[e.key] ?? 0) > 0 || (st.paid[e.key] ?? 0) > 0)
+    .map((e) => ({
+      name: e.name,
+      consumed: fmtU(st.consumed[e.key] ?? 0),
+      covered: fmtU(st.paid[e.key] ?? 0),
+      count: st.partCount[e.key] ?? 0,
+    }))
+    .sort((a, b) => parseFloat(b.consumed) - parseFloat(a.consumed));
+  return {
+    total: fmtU(st.totalSpend),
+    expenseCount: st.nExp,
+    currencies,
+    biggest: st.biggestExp ? { name: st.biggestExp.name, total: fmtU(st.biggestExp.units) } : null,
+    biggestDay: biggestDay ? { date: biggestDay.key, total: fmtU(biggestDay.v) } : null,
+    categories: Object.entries(st.catTotal).sort((a, b) => b[1] - a[1])
+      .map(([cat, units]) => ({ cat, units })),
+    members,
+    daily,
+  };
+}
 type Entity = { key: string; name: string; views: number };
 type Award = { emoji: string; title: string; members: string[]; detail: string; score?: number };
 
@@ -238,7 +272,7 @@ export function funBoard(rows: TripRows) {
     .filter((m) => !out.has(m.id))
     .map((m) => ({ key: m.id, name: m.name, views: m.detail_views ?? 0 }));
   const awards = pick(buildAwards(entities, st, fmtU), entities.length);
-  return { awards: awards.map(({ score: _s, ...a }) => a) };
+  return { awards: awards.map(({ score: _s, ...a }) => a), review: review(st, entities, fmtU) };
 }
 
 export function journeyBoard(jr: JourneyRows) {
@@ -307,5 +341,5 @@ export function journeyBoard(jr: JourneyRows) {
     awards.push({ emoji: "🧊", title: "The Iceberg", members: st.biggestExp.sharers.map(name), detail: `everyone on the biggest expense: ${fmtU(st.biggestExp.units)}`, score: 16 + st.biggestExp.units / totalSpend });
 
   const picked = pick(awards, entities.length);
-  return { awards: picked.map(({ score: _s, ...a }) => a) };
+  return { awards: picked.map(({ score: _s, ...a }) => a), review: review(st, entities, fmtU) };
 }

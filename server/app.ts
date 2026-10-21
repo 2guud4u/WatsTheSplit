@@ -256,6 +256,9 @@ const routes: Route[] = [
         if (t.created_by_token === null || t.created_by_token !== s.token) {
           abort(err(403, "only_creator"));
         }
+        // Wrapped unlocks at end of the end date — enabling requires one.
+        const end = body.end_date !== undefined ? body.end_date : t.end_date;
+        if (body.fun_leaderboard && !end) abort(err(400, "end_date_required"));
         db.run("UPDATE trips SET fun_leaderboard = ? WHERE token = ?", [body.fun_leaderboard ? 1 : 0, t.token]);
       }
       if (pwHash !== null) {
@@ -936,6 +939,14 @@ const routes: Route[] = [
     if (body.name !== undefined && !name) return err(400, "bad_name");
     return mutateJourney(j.token, () => {
       if (name !== null) db.run("UPDATE journeys SET name = ? WHERE token = ?", [name, j.token]);
+      if (body.fun_leaderboard) {
+        // Journey Wrapped unlocks at the last member trip's end — every trip
+        // needs a date or there's no end to unlock at.
+        const undated = db.query<{ name: string }, [string]>(
+          `SELECT t.name FROM journey_trips jt JOIN trips t ON t.token = jt.trip_token
+           WHERE jt.journey_token = ? AND t.end_date IS NULL`).all(j.token);
+        if (undated.length) abort(err(400, "end_date_required"));
+      }
       if (body.fun_leaderboard !== undefined)
         db.run("UPDATE journeys SET fun_leaderboard = ? WHERE token = ?", [body.fun_leaderboard ? 1 : 0, j.token]);
       return json({ ok: true });

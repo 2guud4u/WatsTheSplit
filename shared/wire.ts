@@ -10,7 +10,7 @@ export type ErrorCode =
   // access gates (access.ts) — 401 password_required, 403 no_access
   | "password_required" | "password_empty" | "wrong_password" | "no_access" | "no_trip_access"
   | "only_creator" | "member_linked" | "not_your_member" | "payer_only"
-  | "payer_or_self_only" | "already_linked_other_member"
+  | "payer_or_self_only" | "already_linked_other_member" | "end_date_required"
   // validation
   | "name_required" | "bad_name" | "name_taken" | "name_mismatch"
   | "bad_currency" | "currencies_locked" | "bad_total" | "bad_payer"
@@ -40,7 +40,19 @@ export type MemberSuggestions = { suggestions: string[] };
 // ---------- trip view ----------
 
 export type Award = { emoji: string; title: string; members: string[]; detail: string };
-export type FunBoard = { awards: Award[] };
+export type FunBoard = { awards: Award[]; review?: TripReview };
+
+// "Trip in Review": the Wrapped stats layer, in settle-currency units.
+export type TripReview = {
+  total: string;                 // formatted total spend
+  expenseCount: number;
+  currencies: string[];          // every currency expenses were recorded in
+  biggest: { name: string; total: string } | null;    // biggest single expense
+  biggestDay: { date: string; total: string } | null; // highest-spend day
+  categories: { cat: string; units: number }[];       // spend per category, desc
+  members: { name: string; consumed: string; covered: string; count: number }[];
+  daily: { day: string; units: number }[];            // spend per day, asc
+};
 
 export type TripMember = {
   id: string; name: string; linked: boolean; used: boolean;

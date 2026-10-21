@@ -112,3 +112,13 @@ _Avoid_: Debt, total owed
 **Settlement**:
 A recorded payment from one Member to another that reduces their Balance.
 _Avoid_: Settle-up, repayment, transfer
+
+## Wrapped
+
+**Trip Wrapped**:
+A Trip's end-of-trip recap: silly awards (🎁) plus a stats review, computed from its Expenses, Shares, and Settlements. Enabling it requires an end date on the Trip — the recap unlocks at the end of that day. A Journey has a Journey Wrapped, merged across its member Trips and unlocked at the last member Trip's end date.
+_Avoid_: Fun board, leaderboard
+
+**Trip in Review**:
+The swipeable card-story presentation of a Trip Wrapped: one stat or award per card, opened from the 🎁 prompt or replayed from the Wrapped tab.
+_Avoid_: Story, carousel

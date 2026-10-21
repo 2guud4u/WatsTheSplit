@@ -12,6 +12,7 @@ import { Awards } from "../ui/Awards.tsx";
 import { FunNotice } from "../ui/FunNotice.tsx";
 import { PickChip, SelfChip } from "../ui/Chips.tsx";
 import { PageHead, Tabs } from "../ui/PageHead.tsx";
+import { Review, GiftPrompt, wantsGift, markGiftSeen } from "../ui/Review.tsx";
 import { useTrip } from "./model.ts";
 
 export default function TripView({ token, config, me: meInfo, reloadMe }: {
@@ -31,6 +32,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
   const [settle, setSettle] = useState({ from: "", to: "", amount: "" });
   const [showSettings, setShowSettings] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
+  const [showReview, setShowReview] = useState(false);
   const [settleFrom, settleTo] = [settle.from, settle.to];
 
   if (needsPassword) {
@@ -333,7 +335,19 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
         );
       })()}
 
-      {tab === "fun" && <Awards title="Trip Wrapped" awards={data.fun?.awards ?? null} />}
+      {tab === "fun" && <Awards title="Trip Wrapped" awards={data.fun?.awards ?? null}
+        review={data.fun?.review} currency={t.settle_currency}
+        onReplay={data.fun?.review ? () => { markGiftSeen(`wts_reviewed_${token}`); setShowReview(true); } : undefined} />}
+
+      {wrappedLive && wantsGift(`wts_reviewed_${token}`) && !showReview && (
+        <GiftPrompt title="Trip Wrapped"
+          onOpen={() => { markGiftSeen(`wts_reviewed_${token}`); setShowReview(true); }} />
+      )}
+      {showReview && data.fun && (
+        <Review title={`${t.name} Wrapped`} subtitle={`${t.trip_currency} trip · ${data.expenses.length} expenses`}
+          review={data.fun.review} awards={data.fun.awards}
+          onClose={() => { setShowReview(false); setTab("fun"); }} />
+      )}
 
       {tab === "expenses" && (
       <>
