@@ -3,6 +3,7 @@ import { api } from "../api.ts";
 import type { ExpenseView as ExpenseData } from "../api.ts";
 import { toMinor, fmt, decimals, CATEGORIES, CURRENCY_COUNTRIES } from "../format.ts";
 import { CurrencyPicker } from "../ui/CurrencyPicker.tsx";
+import { PageHead } from "../ui/PageHead.tsx";
 import { useExpense } from "./model.ts";
 
 const COLORS = ["#b56a4c","#7a9b6d","#c9a25e","#8f7fae","#b07575","#7d9aa8","#c9b458","#a08a6e"];
@@ -75,14 +76,9 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
 
   return (
     <>
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h1 style={{ marginBottom: 0 }}>{e.category && `${CATEGORIES[e.category] ?? ""} `}{e.name}</h1>
-        <a href={`#/t/${token}`} className="muted">← {t.name}</a>
-      </div>
-      {e.last_edited_by && <p className="muted">last edited by {e.last_edited_by}</p>}
-      {data.access === "view" && (
-        <div className="card"><p className="muted">View only — <a href={`#/t/${token}`}>pick your name on the trip</a> to edit.</p></div>
-      )}
+      <PageHead
+        title={<>{e.category && `${CATEGORIES[e.category] ?? ""} `}{e.name}</>}
+        back={{ href: `#/t/${token}`, label: t.name }} />
       <div className="row" style={{ margin: "4px 0 12px" }}>
         {e.paid_out
           ? <span className="badge badge-done">✓ paid out — shares don't count toward balances</span>

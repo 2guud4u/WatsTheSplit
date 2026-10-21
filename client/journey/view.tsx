@@ -3,9 +3,12 @@ import { BASE } from "../api.ts";
 import type { JourneyView as JourneyData, JourneyTrip as JTrip, JourneySettingsPatch, Transfer } from "../api.ts";
 import { fmtUnits, fmt, flag, decimals } from "../format.ts";
 import { ShareLink } from "../ui/ShareLink.tsx";
-import { Avatar, OweCard } from "../ui/OweCard.tsx";
+import { OweCard } from "../ui/OweCard.tsx";
 import { SignInButton } from "../ui/SignIn.tsx";
 import { Awards } from "../ui/Awards.tsx";
+import { FunNotice } from "../ui/FunNotice.tsx";
+import { PickChip, SelfChip } from "../ui/Chips.tsx";
+import { PageHead, Tabs } from "../ui/PageHead.tsx";
 import { useJourney } from "./model.ts";
 
 export default function JourneyView({ token, reloadMe }: { token: string; reloadMe: () => void }) {
@@ -15,8 +18,6 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
   const [paying, setPaying] = useState<Transfer | null>(null);
   const [showInvite, setShowInvite] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [funBanner, setFunBanner] = useState(() =>
-    !localStorage.getItem(`wts_fun_notice_j${token}`));
 
   if (err) {
     if (err !== "no_access") return <p className="error">{err}</p>;
@@ -56,10 +57,7 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
 
   return (
     <>
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h1 style={{ marginBottom: 4 }}>{j.name}</h1>
-        <a href="#/" className="muted">← home</a>
-      </div>
+      <PageHead title={j.name} back={{ href: "#/", label: "home" }} />
       <p className="muted" style={{ marginTop: 0 }}>
         Shared balance in {flag(cur)} {cur} · settle up inside trips
       </p>
@@ -70,7 +68,7 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
         return (
           <div className="row" style={{ marginBottom: 12 }}>
             {mine.map((p) => (
-              <span key={p.key} className="member-chip"><Avatar name={p.name} /><b>{p.name}</b>{p.linked ? " ✓" : ""}</span>
+              <SelfChip key={p.key} name={p.name} linked={p.linked} />
             ))}
             {!data.signed_in && (
               <>
@@ -90,34 +88,21 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
 
       {showSettings && <JourneySettings data={data} patchSettings={actions.patchSettings} dissolve={actions.dissolve} setShow={setShowSettings} />}
 
-      {wrappedLive && funBanner && (
-        <div className="card fun-notice">
-          <p className="muted" style={{ margin: 0 }}>
-            🎁 <b>Journey Wrapped</b> is on — silly awards computed across all {data.trips.length} trips in this journey.
-          </p>
-          <div className="row" style={{ marginTop: 8, justifyContent: "flex-end" }}>
-            {allHidden
-              ? <span className="pill">you're hidden from awards</span>
-              : <button className="link" onClick={async () => {
-                  await actions.optOutFunAll(myMembers.map((m) => m.id));
-                }}>hide me from awards</button>}
-            <button className="link" onClick={() => {
-              localStorage.setItem(`wts_fun_notice_j${token}`, "1");
-              setFunBanner(false);
-            }}>dismiss</button>
-          </div>
-        </div>
+      {wrappedLive && (
+        <FunNotice storageKey={`wts_fun_notice_j${token}`}
+          hidden={allHidden}
+          onHide={() => actions.optOutFunAll(myMembers.map((m) => m.id))}>
+          🎁 <b>Journey Wrapped</b> is on — silly awards computed across all {data.trips.length} trips in this journey.
+        </FunNotice>
       )}
 
-      <div className="tabs">
-        <button className={tab === "trips" ? "active" : ""} onClick={() => setTab("trips")}>Trips</button>
-        <button className={tab === "owed" ? "active" : ""} onClick={() => setTab("owed")}>Who owes you</button>
-        <button className={tab === "youowe" ? "active" : ""} onClick={() => setTab("youowe")}>Who you owe</button>
-        <button className={tab === "people" ? "active" : ""} onClick={() => setTab("people")}>People</button>
-        {wrappedLive && (
-          <button className={tab === "fun" ? "active" : ""} onClick={() => setTab("fun")}>🎁 Journey Wrapped</button>
-        )}
-      </div>
+      <Tabs value={tab} onChange={setTab} tabs={[
+        ["trips", "Trips"],
+        ["owed", "Who owes you"],
+        ["youowe", "Who you owe"],
+        ["people", "People"],
+        ...(wrappedLive ? [["fun", "🎁 Journey Wrapped"] as const] : []),
+      ]} />
 
       {tab === "fun" && <Awards title="Journey Wrapped" awards={data.fun?.awards ?? null} />}
 
@@ -132,10 +117,9 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
               {t.access === "view" && (
                 <div className="row" style={{ flexWrap: "wrap", margin: "8px 0" }}>
                   {t.members.map((mm) => (
-                    <button key={mm.id} className="member-chip" disabled={mm.linked && !data.signed_in}
-                      onClick={() => claimIn(t.token, mm.id)}>
-                      <Avatar name={mm.name} />{mm.name}{mm.linked && <span className="pill">🔒</span>}
-                    </button>
+                    <PickChip key={mm.id} name={mm.name} linked={mm.linked}
+                      disabled={mm.linked && !data.signed_in}
+                      onClick={() => claimIn(t.token, mm.id)} />
                   ))}
                   <button className="link" onClick={async () => {
                     const name = prompt("Your name for this trip:");

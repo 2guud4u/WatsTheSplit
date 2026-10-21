@@ -3,12 +3,15 @@ import { BASE, Config, Me } from "../api.ts";
 import type { TripView as TripData, TripSettingsPatch } from "../api.ts";
 import { toMinor, fmt, fmtUnits, decimals, flag, CATEGORIES } from "../format.ts";
 import { CurrencyPicker } from "../ui/CurrencyPicker.tsx";
-import { Avatar, OweCard, memberName } from "../ui/OweCard.tsx";
+import { OweCard, memberName } from "../ui/OweCard.tsx";
 import { SignInButton } from "../ui/SignIn.tsx";
 import { RangePicker } from "../ui/RangePicker.tsx";
 import type { DateRange } from "react-day-picker";
 import { ShareLink } from "../ui/ShareLink.tsx";
 import { Awards } from "../ui/Awards.tsx";
+import { FunNotice } from "../ui/FunNotice.tsx";
+import { PickChip, SelfChip } from "../ui/Chips.tsx";
+import { PageHead, Tabs } from "../ui/PageHead.tsx";
 import { useTrip } from "./model.ts";
 
 export default function TripView({ token, config, me: meInfo, reloadMe }: {
@@ -26,8 +29,6 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
   const [tab, setTab] = useState<"expenses" | "owed" | "youowe" | "fun">("owed");
   const [expPayer, setExpPayer] = useState("");
   const [settle, setSettle] = useState({ from: "", to: "", amount: "" });
-  const [funBanner, setFunBanner] = useState(() =>
-    !localStorage.getItem(`wts_fun_notice_${token}`));
   const [showSettings, setShowSettings] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
   const [settleFrom, settleTo] = [settle.from, settle.to];
@@ -71,11 +72,9 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
       </p>
       <div className="row" style={{ marginBottom: 10 }}>
         {data.members.map((m) => (
-          <button key={m.id} className="member-chip"
+          <PickChip key={m.id} name={m.name} linked={m.linked}
             disabled={m.linked && !data.signed_in}
-            onClick={async () => { await actions.claim({ member_id: m.id }); }}>
-            <Avatar name={m.name} />{m.name}{m.linked && <span className="pill">🔒</span>}
-          </button>
+            onClick={async () => { await actions.claim({ member_id: m.id }); }} />
         ))}
       </div>
       <div className="row">
@@ -122,10 +121,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
 
   return (
     <>
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h1 style={{ marginBottom: 4 }}>{t.name}</h1>
-        <a href="#/" className="muted">← home</a>
-      </div>
+      <PageHead title={t.name} back={{ href: "#/", label: "home" }} />
       <p className="muted" style={{ marginTop: 0 }}>
         {data.current_rate && t.trip_currency !== t.settle_currency
           ? `1 ${t.trip_currency} ≈ ${data.current_rate.rate.toPrecision(6)} ${t.settle_currency} · 1 ${t.settle_currency} ≈ ${(1 / data.current_rate.rate).toPrecision(6)} ${t.trip_currency}`
@@ -141,7 +137,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
 
       {readOnly && !me && <ClaimCard />}
       <div className="row" style={{ marginBottom: 12 }}>
-        {me && <span className="member-chip"><Avatar name={me.name} /><b>{me.name}</b>{me.linked ? " ✓" : ""}</span>}
+        {me && <SelfChip name={me.name} linked={me.linked} />}
         {me && !me.linked && (
           <>
             <span className="muted">not signed in — anyone can claim you</span>
@@ -156,34 +152,20 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
 
       {showSettings && <Settings data={data} token={token} currencies={currencies} actions={actions}
         setShow={setShowSettings} />}
-      {wrappedLive && funBanner && (
-        <div className="card fun-notice">
-          <p className="muted" style={{ margin: 0 }}>
-            🎁 <b>Trip Wrapped</b> is on — the trip creator enabled silly awards from this trip's expense data (who pays, owes, drinks, eats).
-          </p>
-          <div className="row" style={{ marginTop: 8, justifyContent: "flex-end" }}>
-            {me?.opted_out_fun
-              ? <span className="pill">you're hidden from awards</span>
-              : <button className="link" onClick={async () => {
-                  await actions.optOutFun(me!.id);
-                }}>hide me from awards</button>}
-            <button className="link" onClick={() => {
-              localStorage.setItem(`wts_fun_notice_${token}`, "1");
-              setFunBanner(false);
-            }}>dismiss</button>
-          </div>
-        </div>
+      {wrappedLive && (
+        <FunNotice storageKey={`wts_fun_notice_${token}`}
+          hidden={me?.opted_out_fun}
+          onHide={() => actions.optOutFun(me!.id)}>
+          🎁 <b>Trip Wrapped</b> is on — the trip creator enabled silly awards from this trip's expense data (who pays, owes, drinks, eats).
+        </FunNotice>
       )}
 
-
-      <div className="tabs">
-        <button className={tab === "expenses" ? "active" : ""} onClick={() => setTab("expenses")}>Expenses</button>
-        <button className={tab === "owed" ? "active" : ""} onClick={() => setTab("owed")}>Who owes you</button>
-        <button className={tab === "youowe" ? "active" : ""} onClick={() => setTab("youowe")}>Who you owe</button>
-        {wrappedLive && (
-          <button className={tab === "fun" ? "active" : ""} onClick={() => setTab("fun")}>🎁 Trip Wrapped</button>
-        )}
-      </div>
+      <Tabs value={tab} onChange={setTab} tabs={[
+        ["expenses", "Expenses"],
+        ["owed", "Who owes you"],
+        ["youowe", "Who you owe"],
+        ...(wrappedLive ? [["fun", "🎁 Trip Wrapped"] as const] : []),
+      ]} />
       {(tab === "owed" || tab === "youowe") && (() => {
         const oweYou = data.balances.filter((p) => p.to === me?.id);
         const youOwe = data.balances.filter((p) => p.from === me?.id);
