@@ -3,6 +3,7 @@ import { decimals, isCurrency, CURRENCIES } from "./currencies.ts";
 import { crossRate, latestProviderTimestamp } from "./fx.ts";
 import { effectiveShares, expensePayload, tripBalances, journeyBalance, journeyTrips, journeyPeople, loadTripRows, loadJourneyRows, type JourneyMember } from "./ledger.ts";
 import * as notify from "./notify.ts";
+import { mutate, mutateTrip, mutateJourney, edited, lockRate, abort } from "./mutate.ts";
 import { funBoard, journeyBoard } from "./wrapped.ts";
 import { createAuth, type Mailer } from "./auth.ts";
 import {
@@ -60,21 +61,6 @@ const memberIsUsed = (tripToken: string, memberId: string): boolean => {
   );
 };
 
-function edited(e: { id: string }, memberName: string | null) {
-  db.run("UPDATE expenses SET last_edited_by = ?, last_edited_at = ? WHERE id = ?", [
-    memberName, now(), e.id,
-  ]);
-}
-
-function lockRate(eId: string, currency: string, settle: string): void {
-  const r = currency === settle ? { rate: 1, provider: "same-currency", providerTimestamp: null } : crossRate(currency, settle);
-  db.run(
-    "UPDATE expenses SET currency = ?, rate = ?, rate_provider = ?, rate_timestamp = ? WHERE id = ?",
-    [currency, r?.rate ?? null, r?.provider ?? null, r?.providerTimestamp ?? null, eId],
-  );
-}
-
-
 
 // Case-insensitive name check within a trip.
 function nameTaken(tripToken: string, name: string, excludeId?: string): boolean {
@@ -113,21 +99,25 @@ const routes: Route[] = [
     if (r === "code_expired") return err(400, "code_expired");
     if (r === "too_many_attempts") return err(429, "too_many_attempts");
     if (r === "wrong_code") return err(403, "wrong_code");
-    db.run("INSERT INTO users (email) VALUES (?) ON CONFLICT(email) DO NOTHING", [email]);
-    db.run("UPDATE sessions SET user_sub = ? WHERE token = ?", [email, s.token]);
-    // Signing in locks the names this device already picked: each unlinked
-    // claimed Member becomes a Linked Member, unless the account already has
-    // a different Linked Member in that trip.
-    db.run(
-      `UPDATE members SET user_sub = ?
-       WHERE user_sub IS NULL
-         AND id IN (SELECT member_id FROM claims WHERE session_token = ?)
-         AND trip_token NOT IN (SELECT trip_token FROM members WHERE user_sub = ?)`,
-      [email, s.token, email],
-    );
-    for (const { trip_token } of db.query<{ trip_token: string }, [string]>(
-      "SELECT trip_token FROM claims WHERE session_token = ?",
-    ).all(s.token)) notify.trip(trip_token);
+    const linked = mutate(() => {
+      db.run("INSERT INTO users (email) VALUES (?) ON CONFLICT(email) DO NOTHING", [email]);
+      db.run("UPDATE sessions SET user_sub = ? WHERE token = ?", [email, s.token]);
+      // Signing in locks the names this device already picked: each unlinked
+      // claimed Member becomes a Linked Member, unless the account already has
+      // a different Linked Member in that trip.
+      db.run(
+        `UPDATE members SET user_sub = ?
+         WHERE user_sub IS NULL
+           AND id IN (SELECT member_id FROM claims WHERE session_token = ?)
+           AND trip_token NOT IN (SELECT trip_token FROM members WHERE user_sub = ?)`,
+        [email, s.token, email],
+      );
+      return db.query<{ trip_token: string }, [string]>(
+        "SELECT trip_token FROM claims WHERE session_token = ?",
+      ).all(s.token);
+    });
+    if (linked instanceof Response) return linked;
+    for (const { trip_token } of linked) notify.trip(trip_token);
     return json({ ok: true });
   }],
 
@@ -164,21 +154,24 @@ const routes: Route[] = [
       if (!seen.has(n.toLowerCase())) seen.set(n.toLowerCase(), n);
     }
     const names = [...seen.values()];
-    db.run(
-      `INSERT INTO trips (token, name, start_date, end_date, trip_currency, settle_currency,
-         password_hash, password_text, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?)`,
-      [token, name, body.start_date ? String(body.start_date) : null, body.end_date ? String(body.end_date) : null,
-       tc, sc, await Bun.password.hash(pw), pw, now()],
-    );
-    db.run("UPDATE trips SET created_by_token = ? WHERE token = ?", [s.token, token]);
-    // creator's session counts as having entered the password
-    grantConsent(s, qTrip.get(token)!);
-    for (const n of names) {
-      db.run("INSERT INTO members (id, trip_token, name, user_sub, created_at) VALUES (?,?,?,NULL,?)",
-        [crypto.randomUUID(), token, n, now()]);
-    }
-    return json({ token, url: `${BASE_URL}/#/t/${token}` });
+    const pwHash = await Bun.password.hash(pw);
+    return mutate(() => {
+      db.run(
+        `INSERT INTO trips (token, name, start_date, end_date, trip_currency, settle_currency,
+           password_hash, password_text, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?)`,
+        [token, name, body.start_date ? String(body.start_date) : null, body.end_date ? String(body.end_date) : null,
+         tc, sc, pwHash, pw, now()],
+      );
+      db.run("UPDATE trips SET created_by_token = ? WHERE token = ?", [s.token, token]);
+      // creator's session counts as having entered the password
+      grantConsent(s, qTrip.get(token)!);
+      for (const n of names) {
+        db.run("INSERT INTO members (id, trip_token, name, user_sub, created_at) VALUES (?,?,?,NULL,?)",
+          [crypto.randomUUID(), token, n, now()]);
+      }
+      return json({ token, url: `${BASE_URL}/#/t/${token}` });
+    });
   }],
 
   [/^\/api\/trips\/([A-Za-z0-9]+)$/, "GET", async (_req, m, _body, s) => {
@@ -247,32 +240,32 @@ const routes: Route[] = [
     const g = resolveTrip(s, { trip: m[1] }, "edit");
     if (g instanceof Response) return g;
     const t = g.trip;
-    if (body.name !== undefined) db.run("UPDATE trips SET name = ? WHERE token = ?", [String(body.name), t.token]);
-    if (body.start_date !== undefined) db.run("UPDATE trips SET start_date = ? WHERE token = ?", [body.start_date === null ? null : String(body.start_date), t.token]);
-    if (body.end_date !== undefined) db.run("UPDATE trips SET end_date = ? WHERE token = ?", [body.end_date === null ? null : String(body.end_date), t.token]);
-    if (body.trip_currency !== undefined || body.settle_currency !== undefined) {
-      return err(400, "currencies_locked"); // set at creation only
-    }
-    if (body.fun_leaderboard !== undefined) {
-      if (t.created_by_token === null || t.created_by_token !== s.token) {
-        return err(403, "only_creator");
+    // hash outside the transaction: db.transaction is synchronous
+    const pw = body.password !== undefined ? String(body.password) : null;
+    if (pw !== null && pw === "") return err(400, "password_required");
+    const pwHash = pw !== null ? await Bun.password.hash(pw) : null;
+    return mutateTrip(t.token, () => {
+      if (body.name !== undefined) db.run("UPDATE trips SET name = ? WHERE token = ?", [String(body.name), t.token]);
+      if (body.start_date !== undefined) db.run("UPDATE trips SET start_date = ? WHERE token = ?", [body.start_date === null ? null : String(body.start_date), t.token]);
+      if (body.end_date !== undefined) db.run("UPDATE trips SET end_date = ? WHERE token = ?", [body.end_date === null ? null : String(body.end_date), t.token]);
+      if (body.trip_currency !== undefined || body.settle_currency !== undefined) {
+        abort(err(400, "currencies_locked")); // set at creation only
       }
-      db.run("UPDATE trips SET fun_leaderboard = ? WHERE token = ?", [body.fun_leaderboard ? 1 : 0, t.token]);
-    }
-    if (body.password !== undefined) {
-      const pw = String(body.password);
-      if (pw === "") {
-        return err(400, "password_required"); // trips must keep a password
-      } else {
+      if (body.fun_leaderboard !== undefined) {
+        if (t.created_by_token === null || t.created_by_token !== s.token) {
+          abort(err(403, "only_creator"));
+        }
+        db.run("UPDATE trips SET fun_leaderboard = ? WHERE token = ?", [body.fun_leaderboard ? 1 : 0, t.token]);
+      }
+      if (pwHash !== null) {
         db.run("UPDATE trips SET password_hash = ?, password_text = ?, password_ver = password_ver + 1 WHERE token = ?",
-          [await Bun.password.hash(pw), pw, t.token]);
+          [pwHash, pw, t.token]);
         // revoke all existing consents, then re-grant the acting session at the new version
         revokeConsents(t);
         grantConsent(s, qTrip.get(t.token)!);
       }
-    }
-    notify.trip(t.token);
-    return json({ ok: true });
+      return json({ ok: true });
+    });
   }],
 
   [/^\/api\/trips\/([A-Za-z0-9]+)$/, "DELETE", async (_req, m, body, s) => {
@@ -280,9 +273,10 @@ const routes: Route[] = [
     if (g instanceof Response) return g;
     const t = g.trip;
     if (body.name !== t.name) return err(400, "name_mismatch");
-    db.run("DELETE FROM trips WHERE token = ?", [t.token]);
-    notify.trip(t.token);
-    return json({ ok: true });
+    return mutateTrip(t.token, () => {
+      db.run("DELETE FROM trips WHERE token = ?", [t.token]);
+      return json({ ok: true });
+    });
   }],
 
   // ---- members ----
@@ -292,48 +286,50 @@ const routes: Route[] = [
     const t = o.trip;
     const memberId = String(body.member_id ?? "");
     const newName = String(body.name ?? "").trim();
-    let member: Member | null = null;
-    if (memberId) {
-      member = qMember.get(memberId);
-      if (!member || member.trip_token !== t.token) return err(404, "member_not_found");
-      if (member.user_sub && member.user_sub !== s.user_sub)
-        return err(403, "member_linked");
-    } else if (newName) {
-      if (nameTaken(t.token, newName)) return err(409, "name_taken");
-      member = {
-        id: crypto.randomUUID(), trip_token: t.token, name: newName,
-        user_sub: s.user_sub,
-      };
-      db.run("INSERT INTO members (id, trip_token, name, user_sub, created_at) VALUES (?,?,?,?,?)",
-        [member.id, t.token, newName, s.user_sub, now()]);
-    } else return err(400, "member_or_name_required");
-    if (s.user_sub && member.user_sub && member.user_sub !== s.user_sub)
-      return err(403, "member_linked");
-    // signed-in user claiming/linking: enforce one linked member per trip
-    if (s.user_sub) {
-      const existing = linkedMember(s, t.token);
-      if (existing && existing.id !== member.id) return err(409, "already_linked_other_member");
-      if (!member.user_sub) db.run("UPDATE members SET user_sub = ? WHERE id = ?", [s.user_sub, member.id]);
-    }
-    db.run("INSERT OR REPLACE INTO claims (session_token, trip_token, member_id) VALUES (?,?,?)",
-      [s.token, t.token, member.id]);
-    // claiming grants edit access even for journey viewers (they never typed the password)
-    grantConsent(s, t);
-    notify.trip(t.token);
-    return json({ ok: true, member_id: member.id });
+    return mutateTrip(t.token, () => {
+      let member: Member | null = null;
+      if (memberId) {
+        member = qMember.get(memberId);
+        if (!member || member.trip_token !== t.token) return err(404, "member_not_found");
+        if (member.user_sub && member.user_sub !== s.user_sub)
+          abort(err(403, "member_linked"));
+      } else if (newName) {
+        if (nameTaken(t.token, newName)) return err(409, "name_taken");
+        member = {
+          id: crypto.randomUUID(), trip_token: t.token, name: newName,
+          user_sub: s.user_sub,
+        } as Member;
+        db.run("INSERT INTO members (id, trip_token, name, user_sub, created_at) VALUES (?,?,?,?,?)",
+          [member.id, t.token, newName, s.user_sub, now()]);
+      } else return err(400, "member_or_name_required");
+      if (s.user_sub && member.user_sub && member.user_sub !== s.user_sub)
+        abort(err(403, "member_linked"));
+      // signed-in user claiming/linking: enforce one linked member per trip
+      if (s.user_sub) {
+        const existing = linkedMember(s, t.token);
+        if (existing && existing.id !== member.id) abort(err(409, "already_linked_other_member"));
+        if (!member.user_sub) db.run("UPDATE members SET user_sub = ? WHERE id = ?", [s.user_sub, member.id]);
+      }
+      db.run("INSERT OR REPLACE INTO claims (session_token, trip_token, member_id) VALUES (?,?,?)",
+        [s.token, t.token, member.id]);
+      // claiming grants edit access even for journey viewers (they never typed the password)
+      grantConsent(s, t);
+      return json({ ok: true, member_id: member.id });
+    });
   }],
 
   [/^\/api\/trips\/([A-Za-z0-9]+)\/members$/, "POST", async (_req, m, body, s) => {
     const o = resolveTrip(s, { trip: m[1] }, "edit");
     if (o instanceof Response) return o;
     const name = String(body.name ?? "").trim();
-    if (nameTaken(o.trip.token, name)) return err(409, "name_taken");
     if (!name) return err(400, "name_required");
+    if (nameTaken(o.trip.token, name)) return err(409, "name_taken");
     const id = crypto.randomUUID();
-    db.run("INSERT INTO members (id, trip_token, name, user_sub, created_at) VALUES (?,?,?,NULL,?)",
-      [id, o.trip.token, name, now()]);
-    notify.trip(o.trip.token);
-    return json({ id });
+    return mutateTrip(o.trip.token, () => {
+      db.run("INSERT INTO members (id, trip_token, name, user_sub, created_at) VALUES (?,?,?,NULL,?)",
+        [id, o.trip.token, name, now()]);
+      return json({ id });
+    });
   }],
 
   [/^\/api\/members\/([A-Za-z0-9-]+)$/, "PATCH", async (_req, m, body, s) => {
@@ -345,15 +341,18 @@ const routes: Route[] = [
       const name = String(body.name).trim();
       if (!name) return err(400, "name_required");
       if (nameTaken(mem.trip_token, name, mem.id)) return err(409, "name_taken");
-      db.run("UPDATE members SET name = ? WHERE id = ?", [name, mem.id]);
     }
     if (body.opted_out_fun !== undefined) {
       const me = o.me;
       if (!me || me.id !== mem.id) return err(403, "not_your_member");
-      db.run("UPDATE members SET opted_out_fun = ? WHERE id = ?", [body.opted_out_fun ? 1 : 0, mem.id]);
     }
-    notify.trip(mem.trip_token);
-    return json({ ok: true });
+    return mutateTrip(mem.trip_token, () => {
+      if (body.name !== undefined)
+        db.run("UPDATE members SET name = ? WHERE id = ?", [String(body.name).trim(), mem.id]);
+      if (body.opted_out_fun !== undefined)
+        db.run("UPDATE members SET opted_out_fun = ? WHERE id = ?", [body.opted_out_fun ? 1 : 0, mem.id]);
+      return json({ ok: true });
+    });
   }],
 
   [/^\/api\/members\/([A-Za-z0-9-]+)$/, "DELETE", async (_req, m, _body, s) => {
@@ -362,17 +361,21 @@ const routes: Route[] = [
     const mem = qMember.get(m[1])!;
     if (memberIsUsed(mem.trip_token, mem.id)) return err(400, "member_in_use");
     if (mem.id === o.me?.id) return err(400, "cannot_remove_self");
-    db.run("DELETE FROM claims WHERE member_id = ?", [mem.id]);
-    db.run("DELETE FROM members WHERE id = ?", [mem.id]);
-    notify.trip(mem.trip_token);
-    return json({ ok: true });
+    return mutateTrip(mem.trip_token, () => {
+      db.run("DELETE FROM claims WHERE member_id = ?", [mem.id]);
+      db.run("DELETE FROM members WHERE id = ?", [mem.id]);
+      return json({ ok: true });
+    });
   }],
 
   // counts how often the acting member opens an owe-card details modal
   [/^\/api\/trips\/([A-Za-z0-9]+)\/detail-view$/, "POST", async (_req, m, _body, s) => {
     const o = resolveTrip(s, { trip: m[1] }, "edit");
     if (o instanceof Response) return o;
-    if (o.me) db.run("UPDATE members SET detail_views = detail_views + 1 WHERE id = ?", [o.me.id]);
+    if (o.me) return mutateTrip(o.trip.token, () => {
+      db.run("UPDATE members SET detail_views = detail_views + 1 WHERE id = ?", [o.me!.id]);
+      return json({ ok: true });
+    });
     return json({ ok: true });
   }],
 
@@ -388,25 +391,28 @@ const routes: Route[] = [
     const totalMinor = Number(body.total_minor);
     if (!Number.isFinite(totalMinor) || totalMinor < 0) return err(400, "bad_total");
     const payer = body.payer_member_id ? qMember.get(String(body.payer_member_id)) : null;
+    if (body.payer_member_id && (!payer || payer.trip_token !== t.token))
+      return err(400, "bad_payer");
     const id = crypto.randomUUID();
-    db.run(
-      `INSERT INTO expenses (id, trip_token, name, currency, total_minor, payer_member_id,
-        rate, rate_provider, rate_timestamp, recorded_at, last_edited_by, last_edited_at, created_at,
-        created_by_member_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [id, t.token, name, currency, totalMinor, payer?.id ?? null,
-        null, null, null, now(), me?.name ?? null, now(), now(), me?.id ?? null],
-    );
-    // everyone is in by default with NULL share = equal split of the total
-    for (const mm of db.query<{ id: string }, [string]>(
-      "SELECT id FROM members WHERE trip_token = ?",
-    ).all(t.token)) {
-      db.run("INSERT INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,NULL)",
-        [id, mm.id]);
-    }
-    lockRate(id, currency, t.settle_currency);
-    notify.trip(t.token);
-    return json({ id });
+    return mutateTrip(t.token, () => {
+      db.run(
+        `INSERT INTO expenses (id, trip_token, name, currency, total_minor, payer_member_id,
+          rate, rate_provider, rate_timestamp, recorded_at, last_edited_by, last_edited_at, created_at,
+          created_by_member_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [id, t.token, name, currency, totalMinor, payer?.id ?? null,
+          null, null, null, now(), me?.name ?? null, now(), now(), me?.id ?? null],
+      );
+      // everyone is in by default with NULL share = equal split of the total
+      for (const mm of db.query<{ id: string }, [string]>(
+        "SELECT id FROM members WHERE trip_token = ?",
+      ).all(t.token)) {
+        db.run("INSERT INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,NULL)",
+          [id, mm.id]);
+      }
+      lockRate(id, currency, t.settle_currency);
+      return json({ id });
+    });
   }],
 
   [/^\/api\/expenses\/([A-Za-z0-9-]+)$/, "GET", async (_req, m, _body, s) => {
@@ -433,54 +439,56 @@ const routes: Route[] = [
     const g = resolveTrip(s, { expense: e.id }, "edit");
     if (g instanceof Response) return g;
     const { trip: t, me } = g;
-    if (body.name !== undefined) db.run("UPDATE expenses SET name = ? WHERE id = ?", [String(body.name), e.id]);
-    if (body.total_minor !== undefined) {
-      const v = Number(body.total_minor);
-      if (!Number.isFinite(v) || v < 0) return err(400, "bad_total");
-      db.run("UPDATE expenses SET total_minor = ? WHERE id = ?", [v, e.id]);
-    }
-    if (body.payer_member_id !== undefined) {
-      const p = body.payer_member_id ? qMember.get(String(body.payer_member_id)) : null;
-      if (body.payer_member_id && (!p || p.trip_token !== t.token)) return err(400, "bad_payer");
-      db.run("UPDATE expenses SET payer_member_id = ? WHERE id = ?", [p?.id ?? null, e.id]);
-    }
-    if (body.category !== undefined) {
-      const c = body.category === null || body.category === "" ? null : String(body.category).trim();
-      db.run("UPDATE expenses SET category = ? WHERE id = ?", [c, e.id]);
-    }
-    if (body.paid_out !== undefined) {
-      // only the member acting as the payer can mark an expense all-paid;
-      // implemented as marking every participant's share paid
-      if (me?.id !== e.payer_member_id) return err(403, "payer_only");
-      db.run("UPDATE expense_participants SET paid = ? WHERE expense_id = ?", [body.paid_out ? 1 : 0, e.id]);
-    }
-    if (body.currency !== undefined) {
-      const c = String(body.currency).toUpperCase();
-      if (!isCurrency(c)) return err(400, "bad_currency");
-      if (c !== e.currency) {
-        // the typed number stays the same, but minor units can differ:
-        // re-scale total + typed shares + items when decimal places differ
-        const factor = 10 ** (decimals(c) - decimals(e.currency));
-        if (factor !== 1) {
-          db.run("UPDATE expenses SET total_minor = ROUND(total_minor * ?) WHERE id = ?", [factor, e.id]);
-          db.run("UPDATE expense_participants SET share_minor = ROUND(share_minor * ?) WHERE expense_id = ? AND share_minor IS NOT NULL", [factor, e.id]);
-          db.run("UPDATE items SET price_minor = ROUND(price_minor * ?) WHERE expense_id = ?", [factor, e.id]);
-        }
-        lockRate(e.id, c, t.settle_currency); // re-lock rate for the new currency
+    return mutateTrip(t.token, () => {
+      if (body.name !== undefined) db.run("UPDATE expenses SET name = ? WHERE id = ?", [String(body.name), e.id]);
+      if (body.total_minor !== undefined) {
+        const v = Number(body.total_minor);
+        if (!Number.isFinite(v) || v < 0) abort(err(400, "bad_total"));
+        db.run("UPDATE expenses SET total_minor = ? WHERE id = ?", [v, e.id]);
       }
-    }
-    edited(e, me?.name ?? null);
-    notify.trip(t.token);
-    return json({ ok: true });
+      if (body.payer_member_id !== undefined) {
+        const p = body.payer_member_id ? qMember.get(String(body.payer_member_id)) : null;
+        if (body.payer_member_id && (!p || p.trip_token !== t.token)) abort(err(400, "bad_payer"));
+        db.run("UPDATE expenses SET payer_member_id = ? WHERE id = ?", [p?.id ?? null, e.id]);
+      }
+      if (body.category !== undefined) {
+        const c = body.category === null || body.category === "" ? null : String(body.category).trim();
+        db.run("UPDATE expenses SET category = ? WHERE id = ?", [c, e.id]);
+      }
+      if (body.paid_out !== undefined) {
+        // only the member acting as the payer can mark an expense all-paid;
+        // implemented as marking every participant's share paid
+        if (me?.id !== e.payer_member_id) abort(err(403, "payer_only"));
+        db.run("UPDATE expense_participants SET paid = ? WHERE expense_id = ?", [body.paid_out ? 1 : 0, e.id]);
+      }
+      if (body.currency !== undefined) {
+        const c = String(body.currency).toUpperCase();
+        if (!isCurrency(c)) abort(err(400, "bad_currency"));
+        if (c !== e.currency) {
+          // the typed number stays the same, but minor units can differ:
+          // re-scale total + typed shares + items when decimal places differ
+          const factor = 10 ** (decimals(c) - decimals(e.currency));
+          if (factor !== 1) {
+            db.run("UPDATE expenses SET total_minor = ROUND(total_minor * ?) WHERE id = ?", [factor, e.id]);
+            db.run("UPDATE expense_participants SET share_minor = ROUND(share_minor * ?) WHERE expense_id = ? AND share_minor IS NOT NULL", [factor, e.id]);
+            db.run("UPDATE items SET price_minor = ROUND(price_minor * ?) WHERE expense_id = ?", [factor, e.id]);
+          }
+          lockRate(e.id, c, t.settle_currency); // re-lock rate for the new currency
+        }
+      }
+      edited(e, me?.name ?? null);
+      return json({ ok: true });
+    });
   }],
 
   [/^\/api\/expenses\/([A-Za-z0-9-]+)$/, "DELETE", async (_req, m, _body, s) => {
     const o = resolveTrip(s, { expense: m[1] }, "edit");
     if (o instanceof Response) return o;
     const e = qExpense.get(m[1])!;
-    db.run("DELETE FROM expenses WHERE id = ?", [e.id]);
-    notify.trip(o.trip.token);
-    return json({ ok: true });
+    return mutateTrip(o.trip.token, () => {
+      db.run("DELETE FROM expenses WHERE id = ?", [e.id]);
+      return json({ ok: true });
+    });
   }],
 
   // Per-person paid toggle: the payer or the person themself.
@@ -491,11 +499,14 @@ const routes: Route[] = [
     if (g instanceof Response) return g;
     const { trip: t, me } = g;
     const mid = String(body.member_id ?? "");
+    const mem = qMember.get(mid);
+    if (!mem || mem.trip_token !== t.token) return err(404, "member_not_found");
     if (me?.id !== e.payer_member_id && me?.id !== mid) return err(403, "payer_or_self_only");
-    db.run("INSERT OR IGNORE INTO expense_participants (expense_id, member_id, share_minor, paid) VALUES (?,?,NULL,0)", [e.id, mid]);
-    db.run("UPDATE expense_participants SET paid = ? WHERE expense_id = ? AND member_id = ?", [body.paid ? 1 : 0, e.id, mid]);
-    notify.trip(t.token);
-    return json({ ok: true });
+    return mutateTrip(t.token, () => {
+      db.run("INSERT OR IGNORE INTO expense_participants (expense_id, member_id, share_minor, paid) VALUES (?,?,NULL,0)", [e.id, mid]);
+      db.run("UPDATE expense_participants SET paid = ? WHERE expense_id = ? AND member_id = ?", [body.paid ? 1 : 0, e.id, mid]);
+      return json({ ok: true });
+    });
   }],
 
   [/^\/api\/expenses\/([A-Za-z0-9-]+)\/participants$/, "PUT", async (_req, m, body, s) => {
@@ -508,16 +519,17 @@ const routes: Route[] = [
     const on = !!body.on;
     const mem = qMember.get(memberId);
     if (!mem || mem.trip_token !== t.token) return err(404, "member_not_found");
-    if (on) {
-      db.run("INSERT OR IGNORE INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,NULL)", [e.id, memberId]);
-    } else {
-      db.run("DELETE FROM expense_participants WHERE expense_id = ? AND member_id = ?", [e.id, memberId]);
-      db.run(`DELETE FROM item_sharers WHERE member_id = ? AND item_id IN
-        (SELECT id FROM items WHERE expense_id = ?)`, [memberId, e.id]);
-    }
-    edited(e, me?.name ?? null);
-    notify.trip(t.token);
-    return json({ ok: true });
+    return mutateTrip(t.token, () => {
+      if (on) {
+        db.run("INSERT OR IGNORE INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,NULL)", [e.id, memberId]);
+      } else {
+        db.run("DELETE FROM expense_participants WHERE expense_id = ? AND member_id = ?", [e.id, memberId]);
+        db.run(`DELETE FROM item_sharers WHERE member_id = ? AND item_id IN
+          (SELECT id FROM items WHERE expense_id = ?)`, [memberId, e.id]);
+      }
+      edited(e, me?.name ?? null);
+      return json({ ok: true });
+    });
   }],
 
   [/^\/api\/expenses\/([A-Za-z0-9-]+)\/shares$/, "PUT", async (_req, m, body, s) => {
@@ -530,14 +542,15 @@ const routes: Route[] = [
     const value = body.share_minor === null ? null : Number(body.share_minor);
     const mem = qMember.get(memberId);
     if (!mem || mem.trip_token !== t.token) return err(404, "member_not_found");
-    db.run(
-      `INSERT INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,?)
-       ON CONFLICT(expense_id, member_id) DO UPDATE SET share_minor = excluded.share_minor`,
-      [e.id, memberId, value],
-    );
-    edited(e, me?.name ?? null);
-    notify.trip(t.token);
-    return json({ ok: true });
+    return mutateTrip(t.token, () => {
+      db.run(
+        `INSERT INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,?)
+         ON CONFLICT(expense_id, member_id) DO UPDATE SET share_minor = excluded.share_minor`,
+        [e.id, memberId, value],
+      );
+      edited(e, me?.name ?? null);
+      return json({ ok: true });
+    });
   }],
 
   [/^\/api\/expenses\/([A-Za-z0-9-]+)\/split$/, "POST", async (_req, m, body, s) => {
@@ -550,48 +563,49 @@ const routes: Route[] = [
     const eff = effectiveShares(loadTripRows(t), e);
     const assignedEff = eff.reduce((a, s) => a + (s.minor ?? 0), 0);
     const rest = e.total_minor - assignedEff;
-    if (type === "equal_rest") {
-      // distribute the unassigned remainder equally across all participants,
-      // freezing typed/item shares (so remainder participants no longer absorb it)
-      const memberIds = Array.isArray(body.member_ids) ? body.member_ids.map(String) : null;
-      const target = memberIds?.length
-        ? eff.filter((p) => memberIds.includes(p.member_id) && (p.minor ?? 0) > 0)
-        : eff.filter((p) => (p.minor ?? 0) > 0);
-      const n = target.length;
-      if (!n || rest <= 0) return json({ ok: true });
-      const each = Math.floor(rest / n);
-      let leftover = rest - each * n;
-      const stmt = db.prepare(
-        `INSERT INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,0)
-         ON CONFLICT(expense_id, member_id) DO UPDATE SET share_minor = expense_participants.share_minor + ?`,
-      );
-      for (const p of target) {
-        const add = leftover > 0 ? 1 : 0;
-        stmt.run(e.id, p.member_id, (p.minor ?? 0) + each + add);
-        leftover -= add;
-      }
-    } else if (type === "proportional") {
-      // spread unassigned proportionally to current effective shares (typed + items)
-      const total = eff.reduce((a, s) => a + (s.minor ?? 0), 0);
-      if (rest <= 0 || total <= 0) return json({ ok: true });
-      let allocated = 0;
-      const withShare = eff.filter((p) => (p.minor ?? 0) > 0);
-      const upd = db.prepare(
-        `INSERT INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,0)
-         ON CONFLICT(expense_id, member_id) DO UPDATE SET share_minor = expense_participants.share_minor + ?`,
-      );
-      for (let i = 0; i < withShare.length; i++) {
-        const p = withShare[i];
-        const add = i === withShare.length - 1
-          ? rest - allocated
-          : Math.floor((p.minor! / total) * rest);
-        allocated += add;
-        upd.run(e.id, p.member_id, add);
-      }
-    } else return err(400, "bad_split_type");
-    edited(e, me?.name ?? null);
-    notify.trip(t.token);
-    return json({ ok: true });
+    return mutateTrip(t.token, () => {
+      if (type === "equal_rest") {
+        // distribute the unassigned remainder equally across all participants,
+        // freezing typed/item shares (so remainder participants no longer absorb it)
+        const memberIds = Array.isArray(body.member_ids) ? body.member_ids.map(String) : null;
+        const target = memberIds?.length
+          ? eff.filter((p) => memberIds.includes(p.member_id) && (p.minor ?? 0) > 0)
+          : eff.filter((p) => (p.minor ?? 0) > 0);
+        const n = target.length;
+        if (!n || rest <= 0) return json({ ok: true });
+        const each = Math.floor(rest / n);
+        let leftover = rest - each * n;
+        const stmt = db.prepare(
+          `INSERT INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,0)
+           ON CONFLICT(expense_id, member_id) DO UPDATE SET share_minor = expense_participants.share_minor + ?`,
+        );
+        for (const p of target) {
+          const add = leftover > 0 ? 1 : 0;
+          stmt.run(e.id, p.member_id, (p.minor ?? 0) + each + add);
+          leftover -= add;
+        }
+      } else if (type === "proportional") {
+        // spread unassigned proportionally to current effective shares (typed + items)
+        const total = eff.reduce((a, s) => a + (s.minor ?? 0), 0);
+        if (rest <= 0 || total <= 0) return json({ ok: true });
+        let allocated = 0;
+        const withShare = eff.filter((p) => (p.minor ?? 0) > 0);
+        const upd = db.prepare(
+          `INSERT INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,0)
+           ON CONFLICT(expense_id, member_id) DO UPDATE SET share_minor = expense_participants.share_minor + ?`,
+        );
+        for (let i = 0; i < withShare.length; i++) {
+          const p = withShare[i];
+          const add = i === withShare.length - 1
+            ? rest - allocated
+            : Math.floor((p.minor! / total) * rest);
+          allocated += add;
+          upd.run(e.id, p.member_id, add);
+        }
+      } else return err(400, "bad_split_type");
+      edited(e, me?.name ?? null);
+      return json({ ok: true });
+    });
   }],
 
   // ---- items ----
@@ -603,17 +617,22 @@ const routes: Route[] = [
     const { trip: t, me } = g;
     const name = String(body.name ?? "").trim() || "Item";
     const price = Number(body.price_minor ?? 0);
-    const sharers: string[] = Array.isArray(body.sharers) ? body.sharers : [];
-    const itemId = crypto.randomUUID();
-    db.run("INSERT INTO items (id, expense_id, name, price_minor) VALUES (?,?,?,?)",
-      [itemId, e.id, name, price]);
+    const sharers: string[] = Array.isArray(body.sharers) ? body.sharers.map(String) : [];
     for (const mid of sharers) {
-      db.run("INSERT OR IGNORE INTO item_sharers (item_id, member_id) VALUES (?,?)", [itemId, mid]);
-      db.run("INSERT OR IGNORE INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,NULL)", [e.id, mid]);
+      const mm = qMember.get(mid);
+      if (!mm || mm.trip_token !== t.token) return err(404, "member_not_found");
     }
-    edited(e, me?.name ?? null);
-    notify.trip(t.token);
-    return json({ id: itemId });
+    const itemId = crypto.randomUUID();
+    return mutateTrip(t.token, () => {
+      db.run("INSERT INTO items (id, expense_id, name, price_minor) VALUES (?,?,?,?)",
+        [itemId, e.id, name, price]);
+      for (const mid of sharers) {
+        db.run("INSERT OR IGNORE INTO item_sharers (item_id, member_id) VALUES (?,?)", [itemId, mid]);
+        db.run("INSERT OR IGNORE INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,NULL)", [e.id, mid]);
+      }
+      edited(e, me?.name ?? null);
+      return json({ id: itemId });
+    });
   }],
 
   [/^\/api\/items\/([A-Za-z0-9-]+)$/, "PATCH", async (_req, m, body, s) => {
@@ -621,26 +640,34 @@ const routes: Route[] = [
     if (o instanceof Response) return o;
     const item = qItem.get(m[1])!;
     const e = qExpense.get(item.expense_id)!;
-    if (body.name !== undefined) db.run("UPDATE items SET name = ? WHERE id = ?", [String(body.name), item.id]);
-    if (body.price_minor !== undefined) db.run("UPDATE items SET price_minor = ? WHERE id = ?", [Number(body.price_minor), item.id]);
     if (Array.isArray(body.sharers)) {
-      db.run("DELETE FROM item_sharers WHERE item_id = ?", [item.id]);
-      for (const mid of body.sharers) {
-        db.run("INSERT OR IGNORE INTO item_sharers (item_id, member_id) VALUES (?,?)", [item.id, mid]);
-        db.run("INSERT OR IGNORE INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,NULL)", [e.id, mid]);
+      for (const mid of body.sharers.map(String)) {
+        const mm = qMember.get(mid);
+        if (!mm || mm.trip_token !== o.trip.token) return err(404, "member_not_found");
       }
     }
-    edited(e, o.me?.name ?? null);
-    notify.trip(o.trip.token);
-    return json({ ok: true });
+    return mutateTrip(o.trip.token, () => {
+      if (body.name !== undefined) db.run("UPDATE items SET name = ? WHERE id = ?", [String(body.name), item.id]);
+      if (body.price_minor !== undefined) db.run("UPDATE items SET price_minor = ? WHERE id = ?", [Number(body.price_minor), item.id]);
+      if (Array.isArray(body.sharers)) {
+        db.run("DELETE FROM item_sharers WHERE item_id = ?", [item.id]);
+        for (const mid of body.sharers.map(String)) {
+          db.run("INSERT OR IGNORE INTO item_sharers (item_id, member_id) VALUES (?,?)", [item.id, mid]);
+          db.run("INSERT OR IGNORE INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,NULL)", [e.id, mid]);
+        }
+      }
+      edited(e, o.me?.name ?? null);
+      return json({ ok: true });
+    });
   }],
 
   [/^\/api\/items\/([A-Za-z0-9-]+)$/, "DELETE", async (_req, m, _body, s) => {
     const o = resolveTrip(s, { item: m[1] }, "edit");
     if (o instanceof Response) return o;
-    db.run("DELETE FROM items WHERE id = ?", [m[1]]);
-    notify.trip(o.trip.token);
-    return json({ ok: true });
+    return mutateTrip(o.trip.token, () => {
+      db.run("DELETE FROM items WHERE id = ?", [m[1]]);
+      return json({ ok: true });
+    });
   }],
 
   // ---- photos ----
@@ -656,11 +683,12 @@ const routes: Route[] = [
     if (buf.byteLength === 0) return err(400, "empty");
     if (buf.byteLength > 10 * 1024 * 1024) return err(413, "too_large");
     const id = crypto.randomUUID();
-    db.run("INSERT INTO expense_photos (id, expense_id, mime, data, created_at) VALUES (?,?,?,?,?)",
-      [id, e.id, mime, buf, now()]);
-    edited(e, me?.name ?? null);
-    notify.trip(o.trip.token);
-    return json({ id });
+    return mutateTrip(o.trip.token, () => {
+      db.run("INSERT INTO expense_photos (id, expense_id, mime, data, created_at) VALUES (?,?,?,?,?)",
+        [id, e.id, mime, buf, now()]);
+      edited(e, me?.name ?? null);
+      return json({ id });
+    });
   }],
 
   // Viewers can read photos: they already see the expense payload that lists them.
@@ -677,10 +705,11 @@ const routes: Route[] = [
     if (o instanceof Response) return o;
     const p = qPhoto.get(m[1])!;
     const e = qExpense.get(p.expense_id)!;
-    db.run("DELETE FROM expense_photos WHERE id = ?", [p.id]);
-    edited(e, o.me?.name ?? null);
-    notify.trip(o.trip.token);
-    return json({ ok: true });
+    return mutateTrip(o.trip.token, () => {
+      db.run("DELETE FROM expense_photos WHERE id = ?", [p.id]);
+      edited(e, o.me?.name ?? null);
+      return json({ ok: true });
+    });
   }],
 
 
@@ -696,18 +725,20 @@ const routes: Route[] = [
     const amount = Number(body.amount_minor);
     if (!Number.isFinite(amount) || amount <= 0) return err(400, "bad_amount");
     const id = crypto.randomUUID();
-    db.run("INSERT INTO settlements (id, trip_token, from_member, to_member, amount_minor, created_at, created_by) VALUES (?,?,?,?,?,?,?)",
-      [id, t.token, from.id, to.id, amount, now(), me?.name ?? null]);
-    notify.trip(t.token);
-    return json({ id });
+    return mutateTrip(t.token, () => {
+      db.run("INSERT INTO settlements (id, trip_token, from_member, to_member, amount_minor, created_at, created_by) VALUES (?,?,?,?,?,?,?)",
+        [id, t.token, from.id, to.id, amount, now(), me?.name ?? null]);
+      return json({ id });
+    });
   }],
 
   [/^\/api\/settlements\/([A-Za-z0-9-]+)$/, "DELETE", async (_req, m, _body, s) => {
     const o = resolveTrip(s, { settlement: m[1] }, "edit");
     if (o instanceof Response) return o;
-    db.run("DELETE FROM settlements WHERE id = ?", [m[1]]);
-    notify.trip(o.trip.token);
-    return json({ ok: true });
+    return mutateTrip(o.trip.token, () => {
+      db.run("DELETE FROM settlements WHERE id = ?", [m[1]]);
+      return json({ ok: true });
+    });
   }],
 
   // ---- journeys ----
@@ -752,11 +783,13 @@ const routes: Route[] = [
     if (picked.some((t) => t.settle_currency !== sc)) return err(400, "settle_currency_mismatch");
     const tokens = picked.map((t) => t.token);
     const token = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
-    db.run("INSERT INTO journeys (token, name, settle_currency, created_at) VALUES (?,?,?,?)",
-      [token, name, sc, now()]);
-    for (const tt of tokens)
-      db.run("INSERT OR IGNORE INTO journey_trips (journey_token, trip_token) VALUES (?,?)", [token, tt]);
-    return json({ token });
+    return mutate(() => {
+      db.run("INSERT INTO journeys (token, name, settle_currency, created_at) VALUES (?,?,?,?)",
+        [token, name, sc, now()]);
+      for (const tt of tokens)
+        db.run("INSERT OR IGNORE INTO journey_trips (journey_token, trip_token) VALUES (?,?)", [token, tt]);
+      return json({ token });
+    });
   }],
 
   [/^\/api\/journeys\/([A-Za-z0-9]+)$/, "GET", async (_req, m, _body, s) => {
@@ -831,13 +864,12 @@ const routes: Route[] = [
       .map((j) => ({ token: j.token, name: j.name, settle_currency: j.settle_currency }));
     return json({ journeys });
   }],
-
   // journey link: opening it (POST join) grants read access to every member trip
   [/^\/api\/journeys\/([A-Za-z0-9]+)\/join$/, "POST", async (_req, m, _body, s) => {
     const j = qJourney.get(m[1]);
     if (!j) return err(404, "journey_not_found");
     grantJourneyAccess(s, j);
-    for (const t of journeyTrips(j)) notify.trip(t.token);
+    notify.journey(j.token);
     return json({ ok: true });
   }],
 
@@ -852,22 +884,24 @@ const routes: Route[] = [
     if (db.query("SELECT 1 FROM journey_trips WHERE trip_token = ?").get(tt))
       return err(409, "already_in_journey");
     if (t.settle_currency !== j.settle_currency) return err(400, "settle_currency_mismatch");
-    db.run("INSERT INTO journey_trips (journey_token, trip_token) VALUES (?,?)", [j.token, tt]);
-    notify.journey(j.token);
-    return json({ ok: true });
+    return mutateJourney(j.token, () => {
+      db.run("INSERT INTO journey_trips (journey_token, trip_token) VALUES (?,?)", [j.token, tt]);
+      return json({ ok: true });
+    });
   }],
 
   [/^\/api\/journeys\/([A-Za-z0-9]+)\/trips\/([A-Za-z0-9]+)$/, "DELETE", async (_req, m, _body, s) => {
     const g = resolveJourney(s, m[1]);
     if (g instanceof Response) return g;
     const { j } = g;
-    db.run("DELETE FROM journey_trips WHERE journey_token = ? AND trip_token = ?", [j.token, m[2]]);
-    db.run("DELETE FROM journey_merges WHERE journey_token = ? AND member_id IN (SELECT id FROM members WHERE trip_token = ?)", [j.token, m[2]]);
-    notify.journey(j.token);
-    notify.trip(m[2]);
-    return json({ ok: true });
+    const r = mutateJourney(j.token, () => {
+      db.run("DELETE FROM journey_trips WHERE journey_token = ? AND trip_token = ?", [j.token, m[2]]);
+      db.run("DELETE FROM journey_merges WHERE journey_token = ? AND member_id IN (SELECT id FROM members WHERE trip_token = ?)", [j.token, m[2]]);
+      return json({ ok: true });
+    });
+    if (!(r instanceof Response) || r.status < 400) notify.trip(m[2]);
+    return r;
   }],
-
   [/^\/api\/journeys\/([A-Za-z0-9]+)\/merge$/, "POST", async (_req, m, body, s) => {
     const g = resolveJourney(s, m[1]);
     if (g instanceof Response) return g;
@@ -884,10 +918,11 @@ const routes: Route[] = [
     let gid: string | null = null;
     for (const id of valid) { const r = existing.get(j.token, id); if (r) { gid = r.group_id; break; } }
     gid ??= crypto.randomUUID();
-    for (const id of valid)
-      db.run("INSERT OR REPLACE INTO journey_merges (journey_token, member_id, group_id) VALUES (?,?,?)", [j.token, id, gid]);
-    notify.journey(j.token);
-    return json({ ok: true, group_id: gid });
+    return mutateJourney(j.token, () => {
+      for (const id of valid)
+        db.run("INSERT OR REPLACE INTO journey_merges (journey_token, member_id, group_id) VALUES (?,?,?)", [j.token, id, gid]);
+      return json({ ok: true, group_id: gid });
+    });
   }],
 
   // journey settings: rename + Journey Wrapped toggle. Dissolving a journey
@@ -896,16 +931,14 @@ const routes: Route[] = [
     const g = resolveJourney(s, m[1]);
     if (g instanceof Response) return g;
     const { j } = g;
-    if (body.name !== undefined) {
-      const name = String(body.name ?? "").trim();
-      if (!name) return err(400, "bad_name");
-      db.run("UPDATE journeys SET name = ? WHERE token = ?", [name, j.token]);
-    }
-    if (body.fun_leaderboard !== undefined) {
-      db.run("UPDATE journeys SET fun_leaderboard = ? WHERE token = ?", [body.fun_leaderboard ? 1 : 0, j.token]);
-    }
-    notify.journey(j.token);
-    return json({ ok: true });
+    const name = body.name !== undefined ? String(body.name ?? "").trim() : null;
+    if (body.name !== undefined && !name) return err(400, "bad_name");
+    return mutateJourney(j.token, () => {
+      if (name !== null) db.run("UPDATE journeys SET name = ? WHERE token = ?", [name, j.token]);
+      if (body.fun_leaderboard !== undefined)
+        db.run("UPDATE journeys SET fun_leaderboard = ? WHERE token = ?", [body.fun_leaderboard ? 1 : 0, j.token]);
+      return json({ ok: true });
+    });
   }],
 
   [/^\/api\/journeys\/([A-Za-z0-9]+)$/, "DELETE", async (_req, m, body, s) => {
@@ -914,22 +947,27 @@ const routes: Route[] = [
     const { j } = g;
     if (String(body.name ?? "") !== j.name) return err(400, "name_mismatch");
     const trips = journeyTrips(j);
-    db.run("DELETE FROM journey_merges WHERE journey_token = ?", [j.token]);
-    db.run("DELETE FROM journey_access WHERE journey_token = ?", [j.token]);
-    db.run("DELETE FROM journey_trips WHERE journey_token = ?", [j.token]);
-    db.run("DELETE FROM journeys WHERE token = ?", [j.token]);
-    notify.journey(j.token);
+    const r = mutateJourney(j.token, () => {
+      db.run("DELETE FROM journey_merges WHERE journey_token = ?", [j.token]);
+      db.run("DELETE FROM journey_access WHERE journey_token = ?", [j.token]);
+      db.run("DELETE FROM journey_trips WHERE journey_token = ?", [j.token]);
+      db.run("DELETE FROM journeys WHERE token = ?", [j.token]);
+      return json({ ok: true });
+    });
+    // journey fan-out pings member trips already; the removed trips are gone
+    // from journey_trips, so ping them explicitly too
     for (const t of trips) notify.trip(t.token);
-    return json({ ok: true });
+    return r;
   }],
 
   [/^\/api\/journeys\/([A-Za-z0-9]+)\/merge\/([A-Za-z0-9-]+)$/, "DELETE", async (_req, m, _body, s) => {
     const g = resolveJourney(s, m[1]);
     if (g instanceof Response) return g;
     const { j } = g;
-    db.run("DELETE FROM journey_merges WHERE journey_token = ? AND member_id = ?", [j.token, m[2]]);
-    notify.journey(j.token);
-    return json({ ok: true });
+    return mutateJourney(j.token, () => {
+      db.run("DELETE FROM journey_merges WHERE journey_token = ? AND member_id = ?", [j.token, m[2]]);
+      return json({ ok: true });
+    });
   }],
 
   // ---- SSE ----
