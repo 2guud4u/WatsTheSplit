@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { BASE } from "../api.ts";
+import { BASE, describeError } from "../api.ts";
 import type { JourneyView as JourneyData, JourneyTrip as JTrip, JourneySettingsPatch, Transfer } from "../api.ts";
 import { fmtUnits, fmt, flag, decimals } from "../format.ts";
 import { ShareLink } from "../ui/ShareLink.tsx";
@@ -341,6 +341,7 @@ function JourneySettings({ data, patchSettings, dissolve, setShow }: {
 }) {
   const j = data.journey;
   const [delName, setDelName] = useState("");
+  const [funErr, setFunErr] = useState("");
   return (
     <div className="card">
       <h2 style={{ marginTop: 0 }}>Settings</h2>
@@ -361,11 +362,14 @@ function JourneySettings({ data, patchSettings, dissolve, setShow }: {
         <label className="field-label">🎁 Journey Wrapped</label>
         <label className="member-chip" style={{ cursor: "pointer" }}>
           <input type="checkbox" checked={j.fun_leaderboard} onChange={async (e) => {
-            await patchSettings({ fun_leaderboard: e.target.checked });
+            setFunErr("");
+            try { await patchSettings({ fun_leaderboard: e.target.checked }); }
+            catch (err) { setFunErr(describeError(err)); }
           }} />
           Show the Journey Wrapped tab with silly awards
         </label>
         <p className="muted">Awards unlock after the last trip ends.</p>
+        {funErr && <p className="error" style={{ margin: "6px 0 0" }}>{funErr}</p>}
       </div>
       <div className="field">
         <label className="field-label error">Danger zone</label>

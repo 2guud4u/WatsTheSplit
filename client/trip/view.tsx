@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { BASE, Config, Me } from "../api.ts";
+import { BASE, Config, Me, describeError } from "../api.ts";
 import type { TripView as TripData, TripSettingsPatch } from "../api.ts";
 import { toMinor, fmt, fmtUnits, decimals, flag, CATEGORIES } from "../format.ts";
 import { CurrencyPicker } from "../ui/CurrencyPicker.tsx";
@@ -414,6 +414,7 @@ function Settings({ data, token, currencies, actions, setShow }: {
 }) {
   const t = data.trip;
   const [pw, setPw] = useState("");
+  const [funErr, setFunErr] = useState("");
   const [newMember, setNewMember] = useState("");
   const [delName, setDelName] = useState("");
 
@@ -440,12 +441,17 @@ function Settings({ data, token, currencies, actions, setShow }: {
       <div className="field">
         <label className="field-label">🎁 Trip Wrapped</label>
         {data.is_creator ? (
-          <label className="member-chip" style={{ cursor: "pointer" }}>
-            <input type="checkbox" checked={t.fun_leaderboard} onChange={async (e) => {
-              await actions.patchSettings({ fun_leaderboard: e.target.checked });
-            }} />
-            Show the Trip Wrapped tab with silly awards
-          </label>
+          <>
+            <label className="member-chip" style={{ cursor: "pointer" }}>
+              <input type="checkbox" checked={t.fun_leaderboard} onChange={async (e) => {
+                setFunErr("");
+                try { await actions.patchSettings({ fun_leaderboard: e.target.checked }); }
+                catch (err) { setFunErr(describeError(err)); }
+              }} />
+              Show the Trip Wrapped tab with silly awards
+            </label>
+            {funErr && <p className="error" style={{ margin: "6px 0 0" }}>{funErr}</p>}
+          </>
         ) : (
           <p className="muted">Only the trip creator can toggle this.</p>
         )}
