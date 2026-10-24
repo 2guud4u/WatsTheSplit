@@ -99,6 +99,14 @@ check("bob claims placeholder", r.data.ok);
 r = await alice.get(T);
 check("trip lists 3 members", r.data.members.length === 3, r.data.members);
 
+// reselect: claiming a different member moves "me"; claiming back restores it
+r = await bob.post(`${T}/claim`, { member_id: carolId });
+check("bob re-claims a different member", r.data.ok);
+r = await bob.get(T);
+check("re-claim moves me", r.data.me?.id === carolId, r.data.me);
+r = await bob.post(`${T}/claim`, { member_id: bobId });
+check("bob claims back", r.data.ok);
+
 // --- expense with shares ---
 r = await alice.post(`${T}/expenses`, { name: "Dinner", total_minor: 9000, currency: "JPY", payer_member_id: aliceId });
 check("create expense", !!r.data.id, r.data);

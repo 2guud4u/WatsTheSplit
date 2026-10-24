@@ -171,6 +171,26 @@ const str = (v: unknown) => (typeof v === "string" ? v : "");
   check("claim promoted to linked",
     !!linked && typeof linked === "object" && "linked" in linked && linked.linked === true,
     view.data.members);
+
+  // reselect while signed in: claiming another member moves the link
+  const add = await d.post(`/api/trips/${token}/members`, { name: "Bob" });
+  const bobId = str(add.data.id);
+  const re = await d.post(`/api/trips/${token}/claim`, { member_id: bobId });
+  check("signed-in re-claim ok", re.status === 200, re.data);
+  const view2 = await d.get(`/api/trips/${token}`);
+  const ms2 = Array.isArray(view2.data.members) ? view2.data.members : [];
+  const aliceRow = ms2.find((m) =>
+    typeof m === "object" && m !== null && "id" in m && m.id === memberId);
+  const bobRow = ms2.find((m) =>
+    typeof m === "object" && m !== null && "id" in m && m.id === bobId);
+  check("old member unlinked",
+    !!aliceRow && typeof aliceRow === "object" && "linked" in aliceRow && aliceRow.linked === false,
+    view2.data.members);
+  check("new member linked + is me",
+    !!bobRow && typeof bobRow === "object" && "linked" in bobRow && bobRow.linked === true &&
+    typeof view2.data.me === "object" && view2.data.me !== null &&
+    "id" in view2.data.me && view2.data.me.id === bobId,
+    view2.data);
 }
 
 // ---- ADR-0004 access matrix: journey link → view member trips → claim upgrades ----

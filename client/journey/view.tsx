@@ -20,6 +20,9 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
   const [showInvite, setShowInvite] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showReview, setShowReview] = useState(false);
+  const [pendingClaim, setPendingClaim] = useState<{
+    t: JTrip; input: { member_id: string } | { name: string }; label: string; curUsed: boolean;
+  } | null>(null);
 
   if (err) {
     if (err !== "no_access") return <p className="error">{err}</p>;
@@ -51,7 +54,21 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
   const addTrip = async (tt: string) => {
     await actions.addTrip(tt); setAddOpen(false);
   };
-  const claimIn = (tripToken: string, memberId: string) => actions.claim(tripToken, memberId);
+  // Claim (or re-claim) a member in a trip. Switching away from a claimed
+  // member confirms first — its expenses keep the old attribution.
+  const requestClaim = (t: JTrip, input: { member_id: string } | { name: string }, label: string) => {
+    const cur = t.members.find((mm) => data.my_member_ids.includes(mm.id));
+    if (!cur) return void ("member_id" in input ? actions.claim(t.token, input.member_id) : actions.claimByName(t.token, input.name));
+    setPendingClaim({ t, input, label, curUsed: cur.used });
+  };
+  const confirmClaim = async () => {
+    const p = pendingClaim;
+    setPendingClaim(null);
+    try {
+      if (p && "member_id" in p.input) await actions.claim(p.t.token, p.input.member_id);
+      else if (p && "name" in p.input) await actions.claimByName(p.t.token, p.input.name);
+    } catch (e) { alert(describeError(e)); }
+  };
 
   // group members by merge key for the people panel
   const grouped = new Map<string, JourneyData["members"]>();
@@ -128,21 +145,20 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
                 <h2 style={{ margin: 0 }}><a href={`#/t/${t.token}`}>{t.name}</a></h2>
                 <span className="muted">{t.access === "view" ? "view only" : flag(t.settle_currency ?? "") + " " + t.settle_currency}</span>
               </div>
-              {t.access === "view" && (
-                <div className="row" style={{ flexWrap: "wrap", margin: "8px 0" }}>
-                  {t.members.map((mm) => (
-                    <PickChip key={mm.id} name={mm.name} linked={mm.linked}
-                      disabled={mm.linked && !data.signed_in}
-                      onClick={() => claimIn(t.token, mm.id)} />
-                  ))}
-                  <button className="link" onClick={async () => {
-                    const name = prompt("Your name for this trip:");
-                    if (!name?.trim()) return;
-                    try { await actions.claimByName(t.token, name.trim()); }
-                    catch { alert("Name taken — pick another."); }
-                  }}>+ new name</button>
-                </div>
-              )}
+              <div className="row" style={{ flexWrap: "wrap", margin: "8px 0" }}>
+                {t.members.map((mm) => data.my_member_ids.includes(mm.id) ? (
+                  <SelfChip key={mm.id} name={mm.name} linked={mm.linked} />
+                ) : (
+                  <PickChip key={mm.id} name={mm.name} linked={mm.linked}
+                    disabled={mm.linked}
+                    onClick={() => requestClaim(t, { member_id: mm.id }, mm.name)} />
+                ))}
+                <button className="link" onClick={async () => {
+                  const name = prompt("Your name for this trip:");
+                  if (!name?.trim()) return;
+                  requestClaim(t, { name: name.trim() }, name.trim());
+                }}>+ new name</button>
+              </div>
               {t.expenses.length === 0 && <p className="muted">No expenses yet.</p>}
               {t.expenses.map((e) => (
                 <div key={e.id} className="expense-row">
@@ -246,6 +262,20 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
             })}
           </div>
         </>
+      )}
+      {pendingClaim && (
+        <div className="modal-bg" onClick={() => setPendingClaim(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Switch to {pendingClaim.label} in {pendingClaim.t.name}?</h3>
+            {pendingClaim.curUsed && (
+              <p className="warn">Expenses and payments recorded under your current name stay attributed to it.</p>
+            )}
+            <div className="modal-btns">
+              <button onClick={() => setPendingClaim(null)}>cancel</button>
+              <button className="primary" onClick={confirmClaim}>Switch</button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

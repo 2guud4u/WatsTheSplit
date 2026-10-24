@@ -44,7 +44,6 @@ const COPY: Partial<Record<ErrorCode | "network" | "bad_response", string>> = {
   no_access: "You don't have access to this journey",
   name_taken: "Name taken — pick another",
   member_linked: "That member is linked to another account",
-  already_linked_other_member: "You're already linked to a different member in this trip",
   member_in_use: "That member is used by expenses or settlements",
   cannot_remove_self: "You can't remove yourself",
   name_mismatch: "The name doesn't match — type it exactly to confirm",
@@ -107,7 +106,7 @@ interface Routes {
   "POST /api/trips/:trip/password":  R<{ password: string }, Ok, "trip_not_found" | "wrong_password">;
   "PATCH /api/trips/:trip/settings": R<TripSettingsPatch, Ok, TripGate | "currencies_locked" | "only_creator" | "password_empty" | "end_date_required">;
   "POST /api/trips/:trip/claim":     R<ClaimInput, { ok: true; member_id: string },
-                                       TripGate | "member_not_found" | "member_linked" | "name_taken" | "already_linked_other_member" | "member_or_name_required">;
+                                       TripGate | "member_not_found" | "member_linked" | "name_taken" | "member_or_name_required">;
   "POST /api/trips/:trip/members":   R<{ name: string }, { id: string }, TripGate | "name_required" | "name_taken">;
   "POST /api/trips/:trip/detail-view": R<{}, Ok, TripGate>;
   "POST /api/trips/:trip/expenses":  R<NewExpense, { id: string }, TripGate | "name_required" | "bad_currency" | "bad_total" | "bad_payer">;

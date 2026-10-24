@@ -10,7 +10,7 @@ export type ErrorCode =
   // access gates (access.ts) — 401 password_required, 403 no_access
   | "password_required" | "password_empty" | "wrong_password" | "no_access" | "no_trip_access"
   | "only_creator" | "member_linked" | "not_your_member" | "payer_only"
-  | "payer_or_self_only" | "already_linked_other_member" | "end_date_required"
+  | "payer_or_self_only" | "end_date_required"
   // validation
   | "name_required" | "bad_name" | "name_taken" | "name_mismatch"
   | "bad_currency" | "currencies_locked" | "bad_total" | "bad_payer"
@@ -133,7 +133,7 @@ export type ExpenseView = {
 export type JourneyTrip = {
   token: string; name: string; settle_currency: string;
   access: "edit" | "view";
-  members: { id: string; name: string; linked: boolean; opted_out_fun: boolean }[];
+  members: { id: string; name: string; linked: boolean; used: boolean; opted_out_fun: boolean }[];
   expenses: ExpenseSum[];
 };
 export type Person = { key: string; name: string; memberIds: string[]; linked: boolean };

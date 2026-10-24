@@ -308,11 +308,14 @@ const routes: Route[] = [
       } else return err(400, "member_or_name_required");
       if (s.user_sub && member.user_sub && member.user_sub !== s.user_sub)
         abort(err(403, "member_linked"));
-      // signed-in user claiming/linking: enforce one linked member per trip
+      // signed-in user claiming a different member: reselect moves the account
+      // link — the old member unlinks, the new one links.
       if (s.user_sub) {
         const existing = linkedMember(s, t.token);
-        if (existing && existing.id !== member.id) abort(err(409, "already_linked_other_member"));
-        if (!member.user_sub) db.run("UPDATE members SET user_sub = ? WHERE id = ?", [s.user_sub, member.id]);
+        if (existing && existing.id !== member.id)
+          db.run("UPDATE members SET user_sub = NULL WHERE id = ?", [existing.id]);
+        if (member.user_sub !== s.user_sub)
+          db.run("UPDATE members SET user_sub = ? WHERE id = ?", [s.user_sub, member.id]);
       }
       db.run("INSERT OR REPLACE INTO claims (session_token, trip_token, member_id) VALUES (?,?,?)",
         [s.token, t.token, member.id]);
@@ -831,7 +834,7 @@ const routes: Route[] = [
       trips: trips.map((tr) => ({
         token: tr.trip.token, name: tr.trip.name, settle_currency: tr.trip.settle_currency,
         access: hasAccess(s, tr.trip) ? "edit" : "view",
-        members: tr.members.map((mm) => ({ id: mm.id, name: mm.name, linked: !!mm.user_sub, opted_out_fun: !!mm.opted_out_fun })),
+        members: tr.members.map((mm) => ({ id: mm.id, name: mm.name, linked: !!mm.user_sub, used: memberIsUsed(tr.trip.token, mm.id), opted_out_fun: !!mm.opted_out_fun })),
         expenses: tr.expenses.map((e) => expensePayload(tr, e, false)),
       })),
       persons: [...persons.entries()].map(([k, p]) => ({ key: k, ...p })),

@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { BASE, Config, Me, describeError } from "../api.ts";
-import type { TripView as TripData, TripSettingsPatch } from "../api.ts";
+import type { TripView as TripData, TripSettingsPatch, ClaimInput } from "../api.ts";
 import { toMinor, fmt, fmtUnits, decimals, flag, CATEGORIES } from "../format.ts";
 import { CurrencyPicker } from "../ui/CurrencyPicker.tsx";
 import { OweCard, memberName } from "../ui/OweCard.tsx";
@@ -32,6 +32,8 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
   const [settle, setSettle] = useState({ from: "", to: "", amount: "" });
   const [showSettings, setShowSettings] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const [pendingSwitch, setPendingSwitch] = useState<{ input: ClaimInput; label: string } | null>(null);
   const [showReview, setShowReview] = useState(false);
   const [settleFrom, settleTo] = [settle.from, settle.to];
 
@@ -64,26 +66,56 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
 
   // ---------- who are you ----------
   // Journey viewers (readOnly) get the claim card on top and the trip below;
-  // everyone else must pick a name before seeing content.
-  const ClaimCard = () => (
+  // everyone else must pick a name before seeing content. The same card
+  // doubles as the "switch who I am" picker once a member is claimed.
+  const meMember = me ? data.members.find((m) => m.id === me.id) : null;
+  const draftActive = !!(expName.trim() || expTotal || settle.from || settle.to || settle.amount);
+  const requestSwitch = (input: ClaimInput, label: string) =>
+    me ? setPendingSwitch({ input, label }) : void actions.claim(input);
+  const switchModal = pendingSwitch && me && (
+    <div className="modal-bg" onClick={() => setPendingSwitch(null)}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h3>Switch from {me.name} to {pendingSwitch.label}?</h3>
+        {meMember?.used && (
+          <p className="warn">Expenses and payments recorded under {me.name} stay attributed to {me.name}.</p>
+        )}
+        {draftActive && <p className="warn">Anything typed but not saved will be discarded.</p>}
+        <div className="modal-btns">
+          <button onClick={() => setPendingSwitch(null)}>cancel</button>
+          <button className="primary" onClick={async () => {
+            const p = pendingSwitch;
+            setPendingSwitch(null);
+            await actions.claim(p.input);
+            setSwitching(false);
+            setExpName(""); setExpTotal(""); setExpPayer("");
+            setSettle({ from: "", to: "", amount: "" });
+          }}>Switch</button>
+        </div>
+      </div>
+    </div>
+  );
+  const ClaimCard = ({ switching: sw = false, onCancel }: { switching?: boolean; onCancel?: () => void }) => (
     <div className="card">
-      <h2 style={{ marginTop: 0 }}>Who are you?</h2>
+      <h2 style={{ marginTop: 0 }}>{sw ? "Switch who you are" : "Who are you?"}</h2>
       <p className="muted">
-        Pick your name or add a new one{readOnly ? " — or just browse below" : ""}.{" "}
+        {sw ? "Pick your name — you'll act as them in this trip." :
+          <>Pick your name or add a new one{readOnly ? " — or just browse below" : ""}.</>}{" "}
         {!data.signed_in && <>Without signing in, <b>anyone with the trip link can pick your name later</b>.</>}
       </p>
       <div className="row" style={{ marginBottom: 10 }}>
-        {data.members.map((m) => (
+        {data.members.map((m) => m.is_me ? (
+          <SelfChip key={m.id} name={m.name} linked={m.linked} />
+        ) : (
           <PickChip key={m.id} name={m.name} linked={m.linked}
-            disabled={m.linked && !data.signed_in}
-            onClick={async () => { await actions.claim({ member_id: m.id }); }} />
+            disabled={m.linked}
+            onClick={() => requestSwitch({ member_id: m.id }, m.name)} />
         ))}
       </div>
       <div className="row">
         <input className="wide" value={newName} placeholder="Your name"
           onChange={(e) => setNewName(e.target.value)} />
         <button className="primary" disabled={!newName.trim()} onClick={async () => {
-          await actions.claim({ name: newName.trim() });
+          requestSwitch({ name: newName.trim() }, newName.trim());
           setNewName("");
         }}>Join as new</button>
       </div>
@@ -92,6 +124,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
           <SignInButton label="Sign in to lock your name" onSignedIn={() => { reloadMe(); load(); }} />
         </div>
       )}
+      {onCancel && <button className="link" style={{ marginTop: 8 }} onClick={onCancel}>cancel</button>}
     </div>
   );
 
@@ -100,6 +133,16 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
       <>
         <h1>{t.name}</h1>
         <ClaimCard />
+      </>
+    );
+  }
+
+  if (switching && me) {
+    return (
+      <>
+        <h1>{t.name}</h1>
+        <ClaimCard switching onCancel={() => setSwitching(false)} />
+        {switchModal}
       </>
     );
   }
@@ -140,6 +183,9 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
       {readOnly && !me && <ClaimCard />}
       <div className="row" style={{ marginBottom: 12 }}>
         {me && <SelfChip name={me.name} linked={me.linked} />}
+        {me && (
+          <button className="link" onClick={() => setSwitching(true)}>Not {me.name}?</button>
+        )}
         {me && !me.linked && (
           <>
             <span className="muted">not signed in — anyone can claim you</span>
@@ -153,7 +199,8 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
       {showInvite && <ShareLink url={inviteUrl} note="Anyone with this link can join — keep it private." />}
 
       {showSettings && <Settings data={data} token={token} currencies={currencies} actions={actions}
-        setShow={setShowSettings} />}
+        onSwitch={(id, name) => requestSwitch({ member_id: id }, name)} setShow={setShowSettings} />}
+      {switchModal}
       {wrappedLive && (
         <FunNotice storageKey={`wts_fun_notice_${token}`}
           hidden={me?.opted_out_fun}
@@ -407,9 +454,10 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
 
 
 
-function Settings({ data, token, currencies, actions, setShow }: {
+function Settings({ data, token, currencies, actions, onSwitch, setShow }: {
   data: TripData; token: string; currencies: string[];
   actions: { patchSettings: (p: TripSettingsPatch) => Promise<void>; addMember: (n: string) => Promise<void>; removeMember: (id: string) => Promise<void>; deleteTrip: (n: string) => Promise<void> };
+  onSwitch: (id: string, name: string) => void;
   setShow: (b: boolean) => void;
 }) {
   const t = data.trip;
@@ -475,11 +523,16 @@ function Settings({ data, token, currencies, actions, setShow }: {
         {data.members.map((m) => (
           <div key={m.id} className="expense-row">
             <span>{m.name} {m.linked && <span className="pill">🔒 linked</span>} {m.is_me && <span className="pill">(you)</span>}</span>
-            {!m.used && !m.is_me && (
-              <button className="link danger" onClick={async () => {
-                await actions.removeMember(m.id);
-              }}>remove</button>
-            )}
+            <span>
+              {!m.is_me && !m.linked && (
+                <button className="link" onClick={() => onSwitch(m.id, m.name)}>this is me</button>
+              )}
+              {!m.used && !m.is_me && (
+                <button className="link danger" onClick={async () => {
+                  await actions.removeMember(m.id);
+                }}>remove</button>
+              )}
+            </span>
           </div>
         ))}
         <div className="row">
