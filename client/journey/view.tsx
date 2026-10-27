@@ -13,10 +13,11 @@ import { Review, GiftPrompt, wantsGift, markGiftSeen } from "../ui/Review.tsx";
 import { useJourney } from "./model.ts";
 
 export default function JourneyView({ token, reloadMe }: { token: string; reloadMe: () => void }) {
-  const { data, err, load, actions } = useJourney(token);
   const [addOpen, setAddOpen] = useState(false);
+  const { data, err, load, actions } = useJourney(token);
   const [tab, setTab] = useState<"trips" | "owed" | "youowe" | "people" | "fun">("trips");
   const [paying, setPaying] = useState<Transfer | null>(null);
+  const [expandedTrips, setExpandedTrips] = useState<Set<string>>(new Set());
   const [showInvite, setShowInvite] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showReview, setShowReview] = useState(false);
@@ -143,7 +144,12 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
             <div key={t.token} className="card" style={{ marginBottom: 10 }}>
               <div className="row" style={{ justifyContent: "space-between" }}>
                 <h2 style={{ margin: 0 }}><a href={`#/t/${t.token}`}>{t.name}</a></h2>
-                <span className="muted">{t.access === "view" ? "view only" : flag(t.settle_currency ?? "") + " " + t.settle_currency}</span>
+                <span>
+                  <span className="muted">{t.access === "view" ? "view only" : flag(t.settle_currency ?? "") + " " + t.settle_currency}</span>
+                  {t.access === "edit" && (
+                    <button className="link" style={{ marginLeft: 10 }} onClick={() => actions.removeTrip(t.token)}>remove</button>
+                  )}
+                </span>
               </div>
               <div className="row" style={{ flexWrap: "wrap", margin: "8px 0" }}>
                 {t.members.map((mm) => data.my_member_ids.includes(mm.id) ? (
@@ -160,19 +166,35 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
                 }}>+ new name</button>
               </div>
               {t.expenses.length === 0 && <p className="muted">No expenses yet.</p>}
-              {t.expenses.map((e) => (
-                <div key={e.id} className="expense-row">
-                  <a href={`#/t/${t.token}/e/${e.id}`}>{e.name}</a>
-                  <span>
-                    {fmt(e.total_minor, e.currency)}
-                    {e.unassigned_minor > 0 && !e.over &&
-                      <span className="badge badge-unassigned"> {fmt(e.unassigned_minor, e.currency)} unassigned</span>}
-                  </span>
-                </div>
-              ))}
-              {t.access === "edit" && (
-                <button className="link" onClick={() => actions.removeTrip(t.token)}>remove from journey</button>
-              )}
+              {t.expenses.length > 0 && (() => {
+                const expanded = expandedTrips.has(t.token);
+                const shown = expanded ? t.expenses : t.expenses.slice(0, 5);
+                const hidden = t.expenses.length - shown.length;
+                return (
+                  <>
+                    {shown.map((e) => (
+                      <div key={e.id} className="expense-row">
+                        <a href={`#/t/${t.token}/e/${e.id}`}>{e.name}</a>
+                        <span>
+                          {fmt(e.total_minor, e.currency)}
+                          {e.unassigned_minor > 0 && !e.over &&
+                            <span className="badge badge-unassigned"> {fmt(e.unassigned_minor, e.currency)} unassigned</span>}
+                        </span>
+                      </div>
+                    ))}
+                    {hidden > 0 && !expanded && (
+                      <button className="link" style={{ marginTop: 6 }} onClick={() => {
+                        setExpandedTrips((prev) => new Set(prev).add(t.token));
+                      }}>show all ({t.expenses.length})</button>
+                    )}
+                    {hidden > 0 && expanded && (
+                      <button className="link" style={{ marginTop: 6 }} onClick={() => {
+                        setExpandedTrips((prev) => { const n = new Set(prev); n.delete(t.token); return n; });
+                      }}>show less</button>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           ))}
           <button className="link" onClick={() => setAddOpen(!addOpen)}>+ Add a trip</button>

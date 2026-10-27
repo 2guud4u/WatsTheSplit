@@ -119,6 +119,11 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
   const [switching, setSwitching] = useState(false);
   const [pendingSwitch, setPendingSwitch] = useState<{ input: ClaimInput; label: string } | null>(null);
   const [showReview, setShowReview] = useState(false);
+  // Post-create category prompt: when Wrapped is enabled (the fun_leaderboard
+  // setting), ask for a category after an expense is created. The expense is
+  // already saved; the prompt only sets its category. Skip (button or backdrop)
+  // leaves it uncategorized.
+  const [categoryPrompt, setCategoryPrompt] = useState<string | null>(null);
   const [settleFrom, settleTo] = [settle.from, settle.to];
 
   if (needsPassword) {
@@ -250,7 +255,13 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
     });
     showSnack(`Added ${name} · ${fmt(toMinor(expTotal, cur), cur)}`);
     setExpName(""); setExpTotal("");
-    location.hash = `#/t/${token}/e/${r.id}`;
+    if (t.fun_leaderboard) {
+      // Keep the trip page mounted until the prompt is answered — the prompt
+      // must not render on the page we'd otherwise navigate to.
+      setCategoryPrompt(r.id);
+    } else {
+      location.hash = `#/t/${token}/e/${r.id}`;
+    }
   };
 
   // Trip Wrapped unlocks at trip end — or 5 days after creation when no end date is set.
@@ -294,6 +305,32 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
       {showSettings && <Settings data={data} token={token} currencies={currencies} actions={actions}
         onSwitch={(id, name) => requestSwitch({ member_id: id }, name)} setShow={setShowSettings} />}
       {switchModal}
+      {categoryPrompt && (
+        <div className="modal-bg" onClick={() => { setCategoryPrompt(null); location.hash = `#/t/${token}/e/${categoryPrompt}`; }}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>What category is this?</h3>
+            <p className="muted">
+              Wrapped is on for this trip — categories power its silly awards.
+              You can skip and change it later on the expense.
+            </p>
+            <div className="row" style={{ flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
+              {Object.entries(CATEGORIES).map(([cat, emoji]) => (
+                <button key={cat} className="member-chip" onClick={async () => {
+                  const id = categoryPrompt;
+                  setCategoryPrompt(null);
+                  await actions.patchExpense(id, { category: cat });
+                  location.hash = `#/t/${token}/e/${id}`;
+                }}>{emoji} {cat}</button>
+              ))}
+            </div>
+            <div className="modal-btns">
+              <button className="link" onClick={() => { setCategoryPrompt(null); location.hash = `#/t/${token}/e/${categoryPrompt}`; }}>
+                skip for now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {wrappedLive && (
         <FunNotice storageKey={`wts_fun_notice_${token}`}
           hidden={me?.opted_out_fun}

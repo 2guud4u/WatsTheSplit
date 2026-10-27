@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api.ts";
-import type { TripView, TripSettingsPatch, ClaimInput, NewExpense, NewSettlement } from "../api.ts";
+import type { TripView, TripSettingsPatch, ClaimInput, NewExpense, NewSettlement, ExpensePatch } from "../api.ts";
 import { addRecent } from "../types.ts";
 import { useTripEvents } from "../hooks.ts";
 
@@ -63,6 +63,11 @@ export function useTrip(token: string) {
     createExpense: async (input: NewExpense) => {
       return api.call("POST /api/trips/:trip/expenses", { trip: token, ...input });
     },
+    // Set/patch the category of an already-created expense (the post-create prompt).
+    patchExpense: async (expenseId: string, patch: ExpensePatch) => {
+      await api.call("PATCH /api/expenses/:expense", { expense: expenseId, ...patch });
+      load();
+    },
     settle: async (input: NewSettlement) => {
       await api.call("POST /api/trips/:trip/settlements", { trip: token, ...input });
       load();
@@ -99,6 +104,7 @@ export interface TripModel {
     optOutFun: (memberId: string) => Promise<void>;
     detailView: () => void;
     createExpense: (input: NewExpense) => Promise<{ id: string }>;
+    patchExpense: (expenseId: string, patch: ExpensePatch) => Promise<void>;
     settle: (input: NewSettlement) => Promise<void>;
     deleteSettlement: (id: string) => Promise<unknown>;
     patchSettings: (patch: TripSettingsPatch) => Promise<void>;
