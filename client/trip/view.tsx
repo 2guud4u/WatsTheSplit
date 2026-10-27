@@ -31,6 +31,7 @@ function Owe({ p, dir, data, readOnly, markPaid, onDetail }: {
   const m = data.members.find((mm) => mm.id === other);
   const fwd = data.balance_log?.[`${p.from}>${p.to}`] ?? [];
   const [mathOpen, setMathOpen] = useState(false);
+  const [showRate, setShowRate] = useState(false);
   const rev = data.balance_log?.[`${p.to}>${p.from}`] ?? [];
   const entries = [
     ...fwd.map((en) => ({ ...en, sign: 1 })),
@@ -45,7 +46,7 @@ function Owe({ p, dir, data, readOnly, markPaid, onDetail }: {
           onDetail();
         } : undefined} />
       {mathOpen && (
-        <div className="modal-bg" onClick={() => setMathOpen(false)}>
+        <div className="modal-bg" onClick={() => { setMathOpen(false); setShowRate(false); }}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h3>{m?.name ?? "?"} · {fmtUnits(p.amount, data.trip.settle_currency)}</h3>
             <div className="math-list">
@@ -56,16 +57,23 @@ function Owe({ p, dir, data, readOnly, markPaid, onDetail }: {
                       ? en.sign * (en.converted ?? 0) * 10 ** decimals(data.trip.settle_currency)
                       : en.sign * (en.amount_minor ?? 0);
                     const signChar = delta < 0 ? "−" : "+";
+                    const label = en.kind === "settlement"
+                      ? `${memberName(data.members, en.sign > 0 ? p.from : p.to)} paid ${memberName(data.members, en.sign > 0 ? p.to : p.from)}`
+                      : en.label;
+                    // the Locked Rate, trimmed to 2 significant figures (the stored
+                    // value is untouched; the UI just stops printing 15 decimals)
+                    const rate = (r: number) => r.toPrecision(2).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+                    const result = fmtUnits(Math.abs(delta) / 10 ** decimals(data.trip.settle_currency), data.trip.settle_currency);
+                    const prefix = en.kind === "expense"
+                      ? showRate && en.rate !== null && en.rate !== undefined
+                        ? `${fmt(en.share_minor ?? 0, en.currency ?? "USD")} × ${rate(en.rate)} = `
+                        : `${fmt(en.share_minor ?? 0, en.currency ?? "USD")} → `
+                      : "";
+                    const amtText = en.kind === "expense" ? `${prefix}${result}` : result;
                     return (
                       <>
-                        <span>{signChar} {en.kind === "settlement"
-                          ? `${memberName(data.members, en.sign > 0 ? p.from : p.to)} paid ${memberName(data.members, en.sign > 0 ? p.to : p.from)}`
-                          : en.label}</span>
-                        <span className="amt muted">
-                          {en.kind === "expense"
-                            ? `${fmt(en.share_minor ?? 0, en.currency ?? "USD")} × ${en.rate ?? "?"} = ${fmtUnits(Math.abs(delta) / 10 ** decimals(data.trip.settle_currency), data.trip.settle_currency)}`
-                            : `${fmtUnits(Math.round(Math.abs(delta)), data.trip.settle_currency)}`}
-                        </span>
+                        <span>{signChar} {label}</span>
+                        <span className="amt muted">{amtText}</span>
                       </>
                     );
                   })()}
@@ -77,7 +85,12 @@ function Owe({ p, dir, data, readOnly, markPaid, onDetail }: {
               </div>
             </div>
             <div className="modal-btns">
-              <button onClick={() => setMathOpen(false)}>close</button>
+              {entries.some((en) => en.kind === "expense" && en.rate !== null && en.rate !== undefined) && (
+                <button className="link" onClick={() => setShowRate(!showRate)}>
+                  {showRate ? "hide exchange math" : "show exchange math"}
+                </button>
+              )}
+              <button onClick={() => { setMathOpen(false); setShowRate(false); }}>close</button>
             </div>
           </div>
         </div>

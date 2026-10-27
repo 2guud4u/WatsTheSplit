@@ -59,7 +59,7 @@ The currency all Balances and Settlements on a Trip are shown in. A Journey uses
 _Avoid_: Group currency, home currency, base currency, journey currency
 
 **Locked Rate**:
-The exchange rate from an Expense's currency to the Settlement Currency, taken when the Expense is created and taken again only if its currency changes.
+The exchange rate from an Expense's currency to the Settlement Currency, taken when the Expense is created and taken again only if its currency changes. The Balance Details modal shows it trimmed to 2 significant figures (the stored value is always full precision).
 _Avoid_: Live rate, current rate
 
 ## Expenses
