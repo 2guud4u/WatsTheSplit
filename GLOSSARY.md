@@ -122,3 +122,9 @@ _Avoid_: Fun board, leaderboard
 **Trip in Review**:
 The swipeable card-story presentation of a Trip Wrapped: one stat or award per card, opened from the 🎁 prompt or replayed from the Wrapped tab.
 _Avoid_: Story, carousel
+
+## Interface
+
+**Snack**:
+A brief, transient confirmation that appears at the bottom of the screen and fades on its own (or is dismissed by tapping); a successful action shows a green dot, a failed one a red one.
+_Avoid_: Toast, notification, pop-up

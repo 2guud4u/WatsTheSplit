@@ -17,6 +17,8 @@ bun run dev:server   # terminal 1
 bun run dev:client   # terminal 2 → http://localhost:5173
 ```
 
+Demo trip: a seeded trip with token `demo` and password `demo` (THB, settles in USD) — open `http://localhost:5173/#/t/demo?pw=demo`, or `https://jiathe.dev/watsthesplit/#/t/demo?pw=demo` on the public URL.
+
 ## Environment variables
 
 | Var | Purpose |

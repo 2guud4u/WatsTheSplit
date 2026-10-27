@@ -6,6 +6,7 @@ import ExpenseView from "./expense/view.tsx";
 import JourneyView from "./journey/view.tsx";
 import Home from "./home/view.tsx";
 import "./styles.css";
+import SnackRoot from "./ui/Snack.tsx";
 import "react-day-picker/style.css";
 
 // Mutations that fail without a local handler shouldn't die silently —
@@ -40,6 +41,7 @@ function App() {
   const mJourney = /^\/j\/([A-Za-z0-9]+)$/.exec(path);
   return (
     <>
+      <SnackRoot />
       {mExp ? <ExpenseView key={mExp[2]} token={mExp[1]} expenseId={mExp[2]} />
         : mJourney ? <JourneyView key={mJourney[1]} token={mJourney[1]} reloadMe={reloadMe} />
         : mTrip ? <TripView key={mTrip[1]} token={mTrip[1]} config={config} me={me} reloadMe={reloadMe} />

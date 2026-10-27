@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { BASE, Config, Me, describeError } from "../api.ts";
 import type { TripView as TripData, TripSettingsPatch, ClaimInput } from "../api.ts";
 import { toMinor, fmt, fmtUnits, decimals, flag, CATEGORIES } from "../format.ts";
+import { showSnack } from "../ui/Snack.tsx";
 import { CurrencyPicker } from "../ui/CurrencyPicker.tsx";
 import { OweCard, memberName } from "../ui/OweCard.tsx";
 import { SignInButton } from "../ui/SignIn.tsx";
@@ -14,6 +15,76 @@ import { PickChip, SelfChip } from "../ui/Chips.tsx";
 import { PageHead, Tabs } from "../ui/PageHead.tsx";
 import { Review, GiftPrompt, wantsGift, markGiftSeen } from "../ui/Review.tsx";
 import { useTrip } from "./model.ts";
+
+// One owe-card with its own details modal. Defined at module level (NOT inside
+// TripView's render) so React keeps the same component instance across
+// re-renders: opening details fires a mutation, which echoes back into
+// `load()` → re-render, and a component defined inline inside the render
+// would have its `mathOpen` state reset to false, closing the modal.
+function Owe({ p, dir, data, readOnly, markPaid, onDetail }: {
+  p: { from: string; to: string; amount: number }; dir: "in" | "out";
+  data: TripData; readOnly: boolean;
+  markPaid: (p: { from: string; to: string; amount: number }) => Promise<void>;
+  onDetail: () => void;
+}) {
+  const other = dir === "in" ? p.from : p.to;
+  const m = data.members.find((mm) => mm.id === other);
+  const fwd = data.balance_log?.[`${p.from}>${p.to}`] ?? [];
+  const [mathOpen, setMathOpen] = useState(false);
+  const rev = data.balance_log?.[`${p.to}>${p.from}`] ?? [];
+  const entries = [
+    ...fwd.map((en) => ({ ...en, sign: 1 })),
+    ...rev.map((en) => ({ ...en, sign: -1 })),
+  ];
+  return (
+    <>
+      <OweCard name={m?.name ?? "?"} amount={p.amount} currency={data.trip.settle_currency} dir={dir}
+        onConfirm={readOnly ? undefined : async () => { await markPaid(p); }}
+        onDetails={entries.length ? () => {
+          setMathOpen(true);
+          onDetail();
+        } : undefined} />
+      {mathOpen && (
+        <div className="modal-bg" onClick={() => setMathOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>{m?.name ?? "?"} · {fmtUnits(p.amount, data.trip.settle_currency)}</h3>
+            <div className="math-list">
+              {entries.map((en, i) => (
+                <div key={i} className="math-row">
+                  {(() => {
+                    const delta = en.kind === "expense"
+                      ? en.sign * (en.converted ?? 0) * 10 ** decimals(data.trip.settle_currency)
+                      : en.sign * (en.amount_minor ?? 0);
+                    const signChar = delta < 0 ? "−" : "+";
+                    return (
+                      <>
+                        <span>{signChar} {en.kind === "settlement"
+                          ? `${memberName(data.members, en.sign > 0 ? p.from : p.to)} paid ${memberName(data.members, en.sign > 0 ? p.to : p.from)}`
+                          : en.label}</span>
+                        <span className="amt muted">
+                          {en.kind === "expense"
+                            ? `${fmt(en.share_minor ?? 0, en.currency ?? "USD")} × ${en.rate ?? "?"} = ${fmtUnits(Math.abs(delta) / 10 ** decimals(data.trip.settle_currency), data.trip.settle_currency)}`
+                            : `${fmtUnits(Math.round(Math.abs(delta)), data.trip.settle_currency)}`}
+                        </span>
+                      </>
+                    );
+                  })()}
+                </div>
+              ))}
+              <div className="math-row math-total">
+                <span>= net</span>
+                <span className="amt">{fmtUnits(p.amount, data.trip.settle_currency)}</span>
+              </div>
+            </div>
+            <div className="modal-btns">
+              <button onClick={() => setMathOpen(false)}>close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
 
 export default function TripView({ token, config, me: meInfo, reloadMe }: {
   token: string; config: Config | null; me: Me;
@@ -63,6 +134,12 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
 
   const me = data.me;
   const readOnly = data.access === "view";
+  const markPaid = async (p: { from: string; to: string; amount: number }) => {
+    await actions.settle({
+      from_member: p.from, to_member: p.to,
+      amount_minor: Math.round(p.amount * 10 ** decimals(t.settle_currency)),
+    });
+  };
 
   // ---------- who are you ----------
   // Journey viewers (readOnly) get the claim card on top and the trip below;
@@ -150,12 +227,15 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
   const inviteUrl = `${location.origin}${BASE}/#/t/${token}${t.password ? `?pw=${encodeURIComponent(t.password)}` : ""}`;
 
   const createExpense = async () => {
-    if (!expName.trim() || !expTotal) return;
+    const name = expName.trim();
+    if (!name || !expTotal) return;
+    const cur = expCur ?? t.trip_currency;
     const r = await actions.createExpense({
-      name: expName.trim(), total_minor: toMinor(expTotal, expCur ?? t.trip_currency),
-      currency: expCur ?? t.trip_currency,
+      name, total_minor: toMinor(expTotal, cur),
+      currency: cur,
       payer_member_id: expPayer || me?.id,
     });
+    showSnack(`Added ${name} · ${fmt(toMinor(expTotal, cur), cur)}`);
     setExpName(""); setExpTotal("");
     location.hash = `#/t/${token}/e/${r.id}`;
   };
@@ -219,71 +299,6 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
         const oweYou = data.balances.filter((p) => p.to === me?.id);
         const youOwe = data.balances.filter((p) => p.from === me?.id);
         const others = data.balances.filter((p) => p.from !== me?.id && p.to !== me?.id);
-        const markPaid = async (p: { from: string; to: string; amount: number }) => {
-          await actions.settle({
-            from_member: p.from, to_member: p.to,
-            amount_minor: Math.round(p.amount * 10 ** decimals(t.settle_currency)),
-          });
-        };
-        const Owe = ({ p, dir }: { p: { from: string; to: string; amount: number }; dir: "in" | "out" }) => {
-          const other = dir === "in" ? p.from : p.to;
-          const m = data.members.find((mm) => mm.id === other);
-          const fwd = data.balance_log?.[`${p.from}>${p.to}`] ?? [];
-          const [mathOpen, setMathOpen] = useState(false);
-          const rev = data.balance_log?.[`${p.to}>${p.from}`] ?? [];
-          const entries = [
-            ...fwd.map((en) => ({ ...en, sign: 1 })),
-            ...rev.map((en) => ({ ...en, sign: -1 })),
-          ];
-          return (
-            <>
-              <OweCard name={m?.name ?? "?"} amount={p.amount} currency={t.settle_currency} dir={dir}
-                onConfirm={readOnly ? undefined : async () => { await markPaid(p); }}
-                onDetails={entries.length ? () => {
-                  setMathOpen(true);
-                  actions.detailView();
-                } : undefined} />
-              {mathOpen && (
-                <div className="modal-bg" onClick={() => setMathOpen(false)}>
-                  <div className="modal" onClick={(e) => e.stopPropagation()}>
-                    <h3>{m?.name ?? "?"} · {fmtUnits(p.amount, t.settle_currency)}</h3>
-                    <div className="math-list">
-                      {entries.map((en, i) => (
-                        <div key={i} className="math-row">
-                          {(() => {
-                            const delta = en.kind === "expense"
-                              ? en.sign * (en.converted ?? 0) * 10 ** decimals(t.settle_currency)
-                              : en.sign * (en.amount_minor ?? 0);
-                            const signChar = delta < 0 ? "−" : "+";
-                            return (
-                              <>
-                                <span>{signChar} {en.kind === "settlement"
-                                  ? `${memberName(data.members, en.sign > 0 ? p.from : p.to)} paid ${memberName(data.members, en.sign > 0 ? p.to : p.from)}`
-                                  : en.label}</span>
-                                <span className="amt muted">
-                                  {en.kind === "expense"
-                                    ? `${fmt(en.share_minor ?? 0, en.currency ?? "USD")} × ${en.rate ?? "?"} = ${fmtUnits(Math.abs(delta) / 10 ** decimals(t.settle_currency), t.settle_currency)}`
-                                    : `${fmt(Math.round(Math.abs(delta)), t.settle_currency)}`}
-                                </span>
-                              </>
-                            );
-                          })()}
-                        </div>
-                      ))}
-                      <div className="math-row math-total">
-                        <span>= net</span>
-                        <span className="amt">{fmtUnits(p.amount, t.settle_currency)}</span>
-                      </div>
-                    </div>
-                    <div className="modal-btns">
-                      <button onClick={() => setMathOpen(false)}>close</button>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </>
-          );
-        };
         return (
         <div className="card">
           {data.no_rate_count > 0 && (
@@ -301,7 +316,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
             oweYou.length === 0
               ? <p className="muted">Nobody owes you.</p>
               : <div className="owe-grid">
-                  {oweYou.map((p) => <Owe key={p.from} p={p} dir="in" />)}
+                  {oweYou.map((p) => <Owe key={p.from} p={p} dir="in" data={data} readOnly={readOnly} markPaid={markPaid} onDetail={actions.detailView} />)}
                 </div>
           )}
 
@@ -309,7 +324,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
             youOwe.length === 0
               ? <p className="muted">You owe nobody.</p>
               : <div className="owe-grid">
-                  {youOwe.map((p) => <Owe key={p.to} p={p} dir="out" />)}
+                  {youOwe.map((p) => <Owe key={p.to} p={p} dir="out" data={data} readOnly={readOnly} markPaid={markPaid} onDetail={actions.detailView} />)}
                 </div>
           )}
 
