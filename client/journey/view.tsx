@@ -1,9 +1,11 @@
 import React, { useState } from "react";
 import { BASE, describeError } from "../api.ts";
+import { useTabMemory } from "../use-tab-memory.ts";
 import type { JourneyView as JourneyData, JourneyTrip as JTrip, JourneySettingsPatch, Transfer } from "../api.ts";
 import { fmtUnits, fmt, flag, decimals } from "../format.ts";
 import { ShareLink } from "../ui/ShareLink.tsx";
 import { OweCard } from "../ui/OweCard.tsx";
+import { OweDetailsModal } from "../ui/OweDetailsModal.tsx";
 import { SignInButton } from "../ui/SignIn.tsx";
 import { Awards } from "../ui/Awards.tsx";
 import { FunNotice } from "../ui/FunNotice.tsx";
@@ -15,8 +17,9 @@ import { useJourney } from "./model.ts";
 export default function JourneyView({ token, reloadMe }: { token: string; reloadMe: () => void }) {
   const [addOpen, setAddOpen] = useState(false);
   const { data, err, load, actions } = useJourney(token);
-  const [tab, setTab] = useState<"trips" | "owed" | "youowe" | "people" | "fun">("trips");
+
   const [paying, setPaying] = useState<Transfer | null>(null);
+  const [detail, setDetail] = useState<Transfer | null>(null);
   const [expandedTrips, setExpandedTrips] = useState<Set<string>>(new Set());
   const [showInvite, setShowInvite] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -24,6 +27,15 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
   const [pendingClaim, setPendingClaim] = useState<{
     t: JTrip; input: { member_id: string } | { name: string }; label: string; curUsed: boolean;
   } | null>(null);
+  // in-app replacement for the native prompt() (which looks horrible on mobile):
+  // the trip being named for + the draft name. Top-level state so the modal
+  // input is stable across re-renders (no nested component).
+  const [newNameFor, setNewNameFor] = useState<JTrip | null>(null);
+  const [newNameDraft, setNewNameDraft] = useState("");
+
+  // Trip Wrapped unlocks at trip end — or 5 days after creation when no end date is set.
+  const wrappedLive = data ? !!(data.journey.fun_leaderboard && data.wrapped_at && Date.now() >= Date.parse(data.wrapped_at)) : false;
+  const { tab, setTab } = useTabMemory<"trips" | "owed" | "youowe" | "people" | "fun">(token, ["trips", "owed", "youowe", "people", "fun"], "trips", wrappedLive);
 
   if (err) {
     if (err !== "no_access") return <p className="error">{err}</p>;
@@ -48,7 +60,6 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
   const j = data.journey;
   const cur = j.settle_currency;
   const link = `${location.origin}${BASE}/#/j/${j.token}`;
-  const wrappedLive = !!(j.fun_leaderboard && data.wrapped_at && Date.now() >= Date.parse(data.wrapped_at));
   const myMembers = data.members.filter((m) => data.my_member_ids.includes(m.id));
   const allHidden = myMembers.length > 0 && myMembers.every((m) => m.opted_out_fun);
 
@@ -69,6 +80,13 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
       if (p && "member_id" in p.input) await actions.claim(p.t.token, p.input.member_id);
       else if (p && "name" in p.input) await actions.claimByName(p.t.token, p.input.name);
     } catch (e) { alert(describeError(e)); }
+  };
+  const openNewName = (t: JTrip) => { setNewNameFor(t); setNewNameDraft(""); };
+  const confirmNewName = async () => {
+    const name = newNameDraft.trim();
+    if (!name || !newNameFor) return;
+    setNewNameFor(null); setNewNameDraft("");
+    requestClaim(newNameFor, { name }, name);
   };
 
   // group members by merge key for the people panel
@@ -121,7 +139,7 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
         ["owed", "Who owes you"],
         ["youowe", "Who you owe"],
         ["people", "People"],
-        ...(wrappedLive ? [["fun", "🎁 Journey Wrapped"] as const] : []),
+        ...(wrappedLive ? [["fun", "🎁 Wrapped"] as const] : []),
       ]} />
 
       {tab === "fun" && <Awards title="Journey Wrapped" awards={data.fun?.awards ?? null}
@@ -159,11 +177,7 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
                     disabled={mm.linked}
                     onClick={() => requestClaim(t, { member_id: mm.id }, mm.name)} />
                 ))}
-                <button className="link" onClick={async () => {
-                  const name = prompt("Your name for this trip:");
-                  if (!name?.trim()) return;
-                  requestClaim(t, { name: name.trim() }, name.trim());
-                }}>+ new name</button>
+                <button className="link" onClick={() => openNewName(t)}>+ new name</button>
               </div>
               {t.expenses.length === 0 && <p className="muted">No expenses yet.</p>}
               {t.expenses.length > 0 && (() => {
@@ -235,7 +249,8 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
                     name={tab === "owed" ? tr.from : tr.to}
                     amount={tr.amount} currency={cur}
                     dir={tab === "owed" ? "in" : "out"}
-                    onConfirm={mine.size > 0 ? () => setPaying(tr) : undefined} />
+                    onConfirm={mine.size > 0 ? () => setPaying(tr) : undefined}
+                    onDetails={tr.parts.some((p) => p.log.length > 0) ? () => setDetail(tr) : undefined} />
                 ))}
               </div>
             )}
@@ -243,6 +258,10 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
               <MarkPaidModal transfer={paying} currency={cur} trips={data.trips}
                 settlePart={actions.settlePart}
                 onClose={() => setPaying(null)} onDone={() => { setPaying(null); load(); }} />
+            )}
+            {detail && (
+              <DetailModal transfer={detail} currency={cur}
+                members={data.trips} onClose={() => setDetail(null)} />
             )}
           </div>
         );
@@ -299,7 +318,66 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
           </div>
         </div>
       )}
+      {newNameFor && (
+        <div className="modal-bg" onClick={() => setNewNameFor(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Join {newNameFor.name} as</h3>
+            <div className="field"><label className="field-label">Your name</label>
+              <input className="wide" autoFocus value={newNameDraft} placeholder="e.g. Dave"
+                onChange={(e) => setNewNameDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && confirmNewName()} /></div>
+            <div className="modal-btns">
+              <button onClick={() => setNewNameFor(null)}>cancel</button>
+              <button className="primary" disabled={!newNameDraft.trim()} onClick={confirmNewName}>Join</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
+  );
+}
+
+// Detail view for a journey owe-card: one tab per trip, showing each trip's
+// contribution (expenses + settlements) to the pair's net. The same "math"
+// the trip page shows, but per trip — so you can see where each entry comes from.
+function DetailModal({ transfer, currency, members, onClose }: {
+  transfer: Transfer; currency: string;
+  members: { token: string; members: { id: string; name: string }[] }[];
+  onClose: () => void;
+}) {
+  const { from, to, parts } = transfer;
+  const [active, setActive] = useState(parts[0]?.trip_token ?? "");
+  const [showRate, setShowRate] = useState(false);
+  const activePart = parts.find((p) => p.trip_token === active);
+  // Resolve a member id to its name, scanning across the trip's member lists.
+  const nameOf = (id: string) => {
+    for (const t of members) {
+      const m = t.members.find((mm) => mm.id === id);
+      if (m) return m.name;
+    }
+    return "?";
+  };
+  const entries = activePart?.log ?? [];
+  return (
+    <OweDetailsModal
+      title={`${from} · ${fmtUnits(transfer.amount, currency)}`}
+      currency={currency}
+      entries={entries}
+      labelFor={(en) => en.kind === "settlement"
+        ? `${nameOf(en.sign > 0 ? activePart?.from_member ?? "" : activePart?.to_member ?? "")} paid ${nameOf(en.sign > 0 ? activePart?.to_member ?? "" : activePart?.from_member ?? "")}`
+        : en.label}
+      showRate={showRate}
+      onShowRate={() => setShowRate(!showRate)}
+      footer={<div className="math-row math-total">
+        <span>= net</span>
+        <span className="amt">{activePart
+          ? `${activePart.against ? `${to} owes ${from}` : `${from} owes ${to}`} ${fmtUnits(activePart.amount, currency)}`
+          : ""}</span>
+      </div>}
+      tabs={parts.map((p) => ({ key: p.trip_token, label: p.trip_name }))}
+      activeTab={active}
+      onTab={(k) => { setActive(k); setShowRate(false); }}
+      onClose={onClose} />
   );
 }
 

@@ -1,6 +1,7 @@
 import { db, stmt } from "./db.ts";
 import { decimals } from "./currencies.ts";
 import type { Trip, Journey, Member, ExpenseRow } from "./types.ts";
+import type { SignedBalanceLogEntry } from "../shared/wire.ts";
 
 // ---------- row loader ----------
 // One load per trip (or journey), then every computation below is pure:
@@ -182,9 +183,9 @@ export function tripBalances(rows: TripRows) {
     const net = (owed[key] ?? 0) - (owed[rev] ?? 0);
     const epsilon = 0.5 / 10 ** dec;
     if (Math.abs(net) < epsilon) continue;
-    pairs.push(net > 0
-      ? { from: a, to: b, amount: Math.round(net * 10 ** dec) / 10 ** dec }
-      : { from: b, to: a, amount: Math.round(-net * 10 ** dec) / 10 ** dec });
+  pairs.push(net > 0
+    ? { from: a, to: b, amount: Math.round(net * 10 ** dec) / 10 ** dec }
+    : { from: b, to: a, amount: Math.round(-net * 10 ** dec) / 10 ** dec });
   }
   return { members, pairs, log };
 }
@@ -235,10 +236,10 @@ export function journeyPeople(jr: JourneyRows): { persons: Map<string, { name: s
 export function journeyBalance(jr: JourneyRows) {
   const { persons, keyOf } = journeyPeople(jr);
   const dec = decimals(jr.journey.settle_currency);
-  type Part = { trip_token: string; trip_name: string; from_member: string; to_member: string; from_key: string; amount: number };
+  type Part = { trip_token: string; trip_name: string; from_member: string; to_member: string; from_key: string; amount: number; log: SignedBalanceLogEntry[] };
   const pairs = new Map<string, { from_key: string; to_key: string; amount: number; parts: Part[] }>();
   for (const tr of jr.trips) {
-    const { members, pairs: tripPairs } = tripBalances(tr);
+    const { members, pairs: tripPairs, log } = tripBalances(tr);
     const byId = new Map(members.map((m) => [m.id, m]));
     for (const p of tripPairs) {
       const a = byId.get(p.from), b = byId.get(p.to);
@@ -250,7 +251,12 @@ export function journeyBalance(jr: JourneyRows) {
       const key = `${fk}>${tk}`;
       const cur = pairs.get(key) ?? { from_key: fk, to_key: tk, amount: 0, parts: [] };
       cur.amount += amt;
-      cur.parts.push({ trip_token: tr.trip.token, trip_name: tr.trip.name, from_member: p.from, to_member: p.to, from_key: keyOf(a), amount: p.amount });
+      // per-trip contribution log: forward = p.from owes p.to (sign 1), reverse = p.to owes p.from (sign -1)
+      cur.parts.push({
+        trip_token: tr.trip.token, trip_name: tr.trip.name, from_member: p.from, to_member: p.to, from_key: keyOf(a), amount: p.amount,
+        log: [...(log[`${p.from}>${p.to}`] ?? []).map((en) => ({ ...en, sign: 1 })),
+              ...(log[`${p.to}>${p.from}`] ?? []).map((en) => ({ ...en, sign: -1 }))],
+      });
       pairs.set(key, cur);
     }
   }

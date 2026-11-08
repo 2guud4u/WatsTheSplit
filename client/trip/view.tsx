@@ -5,6 +5,7 @@ import { toMinor, fmt, fmtUnits, decimals, flag, CATEGORIES } from "../format.ts
 import { showSnack } from "../ui/Snack.tsx";
 import { CurrencyPicker } from "../ui/CurrencyPicker.tsx";
 import { OweCard, memberName } from "../ui/OweCard.tsx";
+import { OweDetailsModal } from "../ui/OweDetailsModal.tsx";
 import { SignInButton } from "../ui/SignIn.tsx";
 import { RangePicker } from "../ui/RangePicker.tsx";
 import type { DateRange } from "react-day-picker";
@@ -15,6 +16,7 @@ import { PickChip, SelfChip } from "../ui/Chips.tsx";
 import { PageHead, Tabs } from "../ui/PageHead.tsx";
 import { Review, GiftPrompt, wantsGift, markGiftSeen } from "../ui/Review.tsx";
 import { useTrip } from "./model.ts";
+import { useTabMemory } from "../use-tab-memory.ts";
 
 // One owe-card with its own details modal. Defined at module level (NOT inside
 // TripView's render) so React keeps the same component instance across
@@ -46,56 +48,71 @@ function Owe({ p, dir, data, readOnly, markPaid, onDetail }: {
           onDetail();
         } : undefined} />
       {mathOpen && (
-        <div className="modal-bg" onClick={() => { setMathOpen(false); setShowRate(false); }}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h3>{m?.name ?? "?"} · {fmtUnits(p.amount, data.trip.settle_currency)}</h3>
-            <div className="math-list">
-              {entries.map((en, i) => (
-                <div key={i} className="math-row">
-                  {(() => {
-                    const delta = en.kind === "expense"
-                      ? en.sign * (en.converted ?? 0) * 10 ** decimals(data.trip.settle_currency)
-                      : en.sign * (en.amount_minor ?? 0);
-                    const signChar = delta < 0 ? "−" : "+";
-                    const label = en.kind === "settlement"
-                      ? `${memberName(data.members, en.sign > 0 ? p.from : p.to)} paid ${memberName(data.members, en.sign > 0 ? p.to : p.from)}`
-                      : en.label;
-                    // the Locked Rate, trimmed to 2 significant figures (the stored
-                    // value is untouched; the UI just stops printing 15 decimals)
-                    const rate = (r: number) => r.toPrecision(2).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
-                    const result = fmtUnits(Math.abs(delta) / 10 ** decimals(data.trip.settle_currency), data.trip.settle_currency);
-                    const prefix = en.kind === "expense"
-                      ? showRate && en.rate !== null && en.rate !== undefined
-                        ? `${fmt(en.share_minor ?? 0, en.currency ?? "USD")} × ${rate(en.rate)} = `
-                        : `${fmt(en.share_minor ?? 0, en.currency ?? "USD")} → `
-                      : "";
-                    const amtText = en.kind === "expense" ? `${prefix}${result}` : result;
-                    return (
-                      <>
-                        <span>{signChar} {label}</span>
-                        <span className="amt muted">{amtText}</span>
-                      </>
-                    );
-                  })()}
-                </div>
-              ))}
-              <div className="math-row math-total">
-                <span>= net</span>
-                <span className="amt">{fmtUnits(p.amount, data.trip.settle_currency)}</span>
-              </div>
-            </div>
-            <div className="modal-btns">
-              {entries.some((en) => en.kind === "expense" && en.rate !== null && en.rate !== undefined) && (
-                <button className="link" onClick={() => setShowRate(!showRate)}>
-                  {showRate ? "hide exchange math" : "show exchange math"}
-                </button>
-              )}
-              <button onClick={() => { setMathOpen(false); setShowRate(false); }}>close</button>
-            </div>
-          </div>
-        </div>
+        <OweDetailsModal
+          title={`${m?.name ?? "?"} · ${fmtUnits(p.amount, data.trip.settle_currency)}`}
+          currency={data.trip.settle_currency}
+          entries={entries}
+          labelFor={(en) => en.kind === "settlement"
+            ? `${memberName(data.members, en.sign > 0 ? p.from : p.to)} paid ${memberName(data.members, en.sign > 0 ? p.to : p.from)}`
+            : en.label}
+          showRate={showRate}
+          onShowRate={() => setShowRate(!showRate)}
+          footer={<div className="math-row math-total">
+            <span>= net</span>
+            <span className="amt">{fmtUnits(p.amount, data.trip.settle_currency)}</span>
+          </div>}
+          onClose={() => { setMathOpen(false); setShowRate(false); }} />
       )}
     </>
+  );
+}
+
+// "Who are you?" claim / switch card. Defined at module level (NOT inside
+// TripView's render) so React keeps the same component instance across
+// re-renders: the name field is typed by an invitee, and an inline component
+// would be rebuilt on every keystroke (setNewName → re-render), remounting
+// the <input> and dropping its focus — the keyboard goes away on mobile
+// after each character. The `newName` draft lives in this component.
+function ClaimCard({ data, readOnly, requestSwitch, load, reloadMe,
+  switching = false, onCancel }: {
+  data: TripData; readOnly: boolean;
+  requestSwitch: (input: ClaimInput, label: string) => void;
+  load: () => Promise<void>; reloadMe: () => void;
+  switching?: boolean; onCancel?: () => void;
+}) {
+  const [newName, setNewName] = useState("");
+  return (
+    <div className="card">
+      <h2 style={{ marginTop: 0 }}>{switching ? "Switch who you are" : "Who are you?"}</h2>
+      <p className="muted">
+        {switching ? "Pick your name — you'll act as them in this trip." :
+          <>Pick your name or add a new one{readOnly ? " — or just browse below" : ""}.</>}{" "}
+        {!data.signed_in && <>Without signing in, <b>anyone with the trip link can pick your name later</b>.</>}
+      </p>
+      <div className="row" style={{ marginBottom: 10 }}>
+        {data.members.map((m) => m.is_me ? (
+          <SelfChip key={m.id} name={m.name} linked={m.linked} />
+        ) : (
+          <PickChip key={m.id} name={m.name} linked={m.linked}
+            disabled={m.linked}
+            onClick={() => requestSwitch({ member_id: m.id }, m.name)} />
+        ))}
+      </div>
+      <div className="row">
+        <input className="wide" value={newName} placeholder="Your name"
+          onChange={(e) => setNewName(e.target.value)} />
+        <button className="primary" disabled={!newName.trim()} onClick={async () => {
+          requestSwitch({ name: newName.trim() }, newName.trim());
+          setNewName("");
+        }}>Join as new</button>
+      </div>
+      {!data.signed_in && (
+        <div style={{ marginTop: 14 }}>
+          <SignInButton label="Sign in to lock your name" onSignedIn={() => { reloadMe(); load(); }} />
+        </div>
+      )}
+      {onCancel && <button className="link" style={{ marginTop: 8 }} onClick={onCancel}>cancel</button>}
+    </div>
   );
 }
 
@@ -107,11 +124,10 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
   const { data, needsPassword, load, actions } = vm;
   const [password, setPassword] = useState("");
   const [pwErr, setPwErr] = useState("");
-  const [newName, setNewName] = useState("");
   const [expName, setExpName] = useState("");
   const [expTotal, setExpTotal] = useState("");
   const [expCur, setExpCur] = useState<string | null>(null);
-  const [tab, setTab] = useState<"expenses" | "owed" | "youowe" | "fun">("owed");
+
   const [expPayer, setExpPayer] = useState("");
   const [settle, setSettle] = useState({ from: "", to: "", amount: "" });
   const [showSettings, setShowSettings] = useState(false);
@@ -125,6 +141,11 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
   // leaves it uncategorized.
   const [categoryPrompt, setCategoryPrompt] = useState<string | null>(null);
   const [settleFrom, settleTo] = [settle.from, settle.to];
+
+  // Trip Wrapped unlocks at trip end — or 5 days after creation when no end date is set.
+  const wrappedAt = data ? (data.trip.end_date ? `${data.trip.end_date}T23:59:59` : new Date(new Date(data.trip.created_at).getTime() + 5 * 86400e3).toISOString()) : "";
+  const wrappedLive = data ? (data.trip.fun_leaderboard && Date.now() >= Date.parse(wrappedAt)) : false;
+  const { tab, setTab } = useTabMemory<"expenses" | "owed" | "youowe" | "fun">(token, ["expenses", "owed", "youowe", "fun"], "owed", wrappedLive);
 
   if (needsPassword) {
     return (
@@ -189,45 +210,16 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
       </div>
     </div>
   );
-  const ClaimCard = ({ switching: sw = false, onCancel }: { switching?: boolean; onCancel?: () => void }) => (
-    <div className="card">
-      <h2 style={{ marginTop: 0 }}>{sw ? "Switch who you are" : "Who are you?"}</h2>
-      <p className="muted">
-        {sw ? "Pick your name — you'll act as them in this trip." :
-          <>Pick your name or add a new one{readOnly ? " — or just browse below" : ""}.</>}{" "}
-        {!data.signed_in && <>Without signing in, <b>anyone with the trip link can pick your name later</b>.</>}
-      </p>
-      <div className="row" style={{ marginBottom: 10 }}>
-        {data.members.map((m) => m.is_me ? (
-          <SelfChip key={m.id} name={m.name} linked={m.linked} />
-        ) : (
-          <PickChip key={m.id} name={m.name} linked={m.linked}
-            disabled={m.linked}
-            onClick={() => requestSwitch({ member_id: m.id }, m.name)} />
-        ))}
-      </div>
-      <div className="row">
-        <input className="wide" value={newName} placeholder="Your name"
-          onChange={(e) => setNewName(e.target.value)} />
-        <button className="primary" disabled={!newName.trim()} onClick={async () => {
-          requestSwitch({ name: newName.trim() }, newName.trim());
-          setNewName("");
-        }}>Join as new</button>
-      </div>
-      {!data.signed_in && (
-        <div style={{ marginTop: 14 }}>
-          <SignInButton label="Sign in to lock your name" onSignedIn={() => { reloadMe(); load(); }} />
-        </div>
-      )}
-      {onCancel && <button className="link" style={{ marginTop: 8 }} onClick={onCancel}>cancel</button>}
-    </div>
-  );
+
+  const claimProps = {
+    data, readOnly, requestSwitch, load, reloadMe,
+  };
 
   if (!me && !readOnly) {
     return (
       <>
         <h1>{t.name}</h1>
-        <ClaimCard />
+        <ClaimCard {...claimProps} />
       </>
     );
   }
@@ -236,7 +228,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
     return (
       <>
         <h1>{t.name}</h1>
-        <ClaimCard switching onCancel={() => setSwitching(false)} />
+        <ClaimCard {...claimProps} switching onCancel={() => setSwitching(false)} />
         {switchModal}
       </>
     );
@@ -264,10 +256,6 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
     }
   };
 
-  // Trip Wrapped unlocks at trip end — or 5 days after creation when no end date is set.
-  const wrappedAt = t.end_date ? `${t.end_date}T23:59:59` : new Date(new Date(t.created_at).getTime() + 5 * 86400e3).toISOString();
-  const wrappedLive = t.fun_leaderboard && Date.now() >= Date.parse(wrappedAt);
-
   return (
     <>
       <PageHead title={t.name} back={{ href: "#/", label: "home" }} />
@@ -284,7 +272,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
         {data.journey && <> · part of <a href={`#/j/${data.journey.token}`}>{data.journey.name}</a></>}
       </p>
 
-      {readOnly && !me && <ClaimCard />}
+      {readOnly && !me && <ClaimCard {...claimProps} />}
       <div className="row" style={{ marginBottom: 12 }}>
         {me && <SelfChip name={me.name} linked={me.linked} />}
         {me && (
@@ -343,7 +331,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
         ["expenses", "Expenses"],
         ["owed", "Who owes you"],
         ["youowe", "Who you owe"],
-        ...(wrappedLive ? [["fun", "🎁 Trip Wrapped"] as const] : []),
+        ...(wrappedLive ? [["fun", "🎁 Wrapped"] as const] : []),
       ]} />
       {(tab === "owed" || tab === "youowe") && (() => {
         const oweYou = data.balances.filter((p) => p.to === me?.id);

@@ -80,6 +80,8 @@ export type BalanceLogEntry = {
   share_minor?: number; currency?: string; rate?: number | null;
   converted?: number; amount_minor?: number;
 };
+// One log entry with its direction baked in: 1 = "from owes to", -1 = "to owes from".
+export type SignedBalanceLogEntry = BalanceLogEntry & { sign: number };
 
 export type TripView = {
   trip: {
@@ -145,6 +147,7 @@ export type MergeHint = { name: string; member_ids: string[]; trips: string[] };
 export type TransferPart = {
   trip_token: string; trip_name: string; from_member: string; to_member: string;
   amount: number; against: boolean;
+  log: SignedBalanceLogEntry[];
 };
 export type Transfer = {
   from: string; to: string; amount: number;
