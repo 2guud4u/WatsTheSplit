@@ -139,7 +139,7 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
         ["owed", "Who owes you"],
         ["youowe", "Who you owe"],
         ["people", "People"],
-        ...(wrappedLive ? [["fun", "🎁 Wrapped"] as const] : []),
+        ...(wrappedLive ? [["fun", "Wrapped"] as const] : []),
       ]} />
 
       {tab === "fun" && <Awards title="Journey Wrapped" awards={data.fun?.awards ?? null}

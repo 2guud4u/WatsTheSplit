@@ -150,6 +150,22 @@ CREATE TABLE IF NOT EXISTS expense_photos (
   created_at TEXT NOT NULL
 );
 
+-- Audit trail of every expense/settlement change. One row per field change,
+-- plus a 'created' and 'deleted' event so every record's life is visible.
+CREATE TABLE IF NOT EXISTS expense_history (
+  id           TEXT PRIMARY KEY,
+  trip_token   TEXT NOT NULL REFERENCES trips(token) ON DELETE CASCADE,
+  entity_type  TEXT NOT NULL,          -- 'expense' | 'settlement'
+  entity_id    TEXT NOT NULL,
+  entity_name  TEXT NOT NULL,          -- human label, e.g. "Dinner" or "Alice paid Bob"
+  kind         TEXT NOT NULL,          -- 'created' | 'deleted' | 'changed'
+  field        TEXT,                   -- the field that changed (null for created/deleted)
+  old_value    TEXT,
+  new_value    TEXT,
+  by           TEXT,                  -- member name, null when anonymous
+  created_at   TEXT NOT NULL
+);
+
 -- Latest USD->X snapshot. Each row carries the provider's timestamp.
 CREATE TABLE IF NOT EXISTS fx_latest (
   code              TEXT PRIMARY KEY,

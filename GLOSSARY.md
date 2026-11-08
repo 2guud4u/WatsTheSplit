@@ -128,3 +128,13 @@ _Avoid_: Story, carousel
 **Snack**:
 A brief, transient confirmation that appears at the bottom of the screen and fades on its own (or is dismissed by tapping); a successful action shows a green dot, a failed one a red one.
 _Avoid_: Toast, notification, pop-up
+
+## Change log
+
+**Change**:
+One record of what happened to an Expense or Settlement: created, deleted, or a single field edited (name, amount, payer, share, item, etc.), who did it, and when.
+_Avoid_: Edit, entry, log line
+
+**History**:
+A Trip's full list of every Change, shown newest first in the History tab — all Expenses and Settlements, not just one.
+_Avoid_: Activity feed, audit log

@@ -3,7 +3,7 @@ import type {
   MemberSuggestions, Me, MyJourneys, MyTrips, TripView, Ok,
   NewTrip, TripSettingsPatch, ClaimInput, NewExpense, ExpensePatch,
   NewSettlement, ItemPatch, NewItem, SplitInput, MemberPatch,
-  NewJourney, JourneySettingsPatch,
+  NewJourney, JourneySettingsPatch, HistoryEntry,
 } from "../../shared/wire.ts";
 export type * from "../../shared/wire.ts";
 
@@ -102,6 +102,7 @@ interface Routes {
 
   "POST /api/trips":                 R<NewTrip, { token: string; url: string }, "name_required" | "bad_currency" | "password_required">;
   "GET /api/trips/:trip":            R<{}, TripView, TripGate>;
+  "GET /api/trips/:trip/history":    R<{}, { history: HistoryEntry[] }, TripGate>;
   "DELETE /api/trips/:trip":         R<{ name: string }, Ok, TripGate | "name_mismatch">;
   "POST /api/trips/:trip/password":  R<{ password: string }, Ok, "trip_not_found" | "wrong_password">;
   "PATCH /api/trips/:trip/settings": R<TripSettingsPatch, Ok, TripGate | "currencies_locked" | "only_creator" | "password_empty" | "end_date_required">;

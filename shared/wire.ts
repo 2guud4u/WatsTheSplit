@@ -74,6 +74,32 @@ export type SettlementRow = {
   amount_minor: number; created_at: string; created_by: string | null;
 };
 
+// A structured value a field changed to / from. The client renders it
+// (amounts → currency, members → names, etc.) so the stored log stays
+// raw and the display is consistent with the rest of the app.
+export type HistoryValue =
+  | { kind: "text"; text: string }
+  | { kind: "none" }
+  | { kind: "amount"; amount_minor: number; currency: string }
+  | { kind: "share"; member_id: string; member_name: string; amount_minor: number | null; currency: string }
+  | { kind: "member"; member_id: string; member_name: string }
+  | { kind: "member_flag"; member_id: string; member_name: string; flag: boolean; on_label: string; off_label: string }
+  | { kind: "boolean"; value: boolean }
+  | { kind: "split"; type: string };
+
+export type HistoryEntry = {
+  id: string;
+  entity_type: "expense" | "settlement";
+  entity_id: string;
+  entity_name: string;
+  kind: "created" | "deleted" | "changed";
+  field: string | null;
+  old_value: HistoryValue | null;
+  new_value: HistoryValue | null;
+  by: string | null;
+  created_at: string;
+};
+
 export type BalancePair = { from: string; to: string; amount: number };
 export type BalanceLogEntry = {
   kind: "expense" | "settlement"; label: string;

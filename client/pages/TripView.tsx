@@ -17,6 +17,8 @@ import { PageHead, Tabs } from "../components/PageHead.tsx";
 import { Review, GiftPrompt, wantsGift, markGiftSeen } from "../components/Review.tsx";
 import { useTrip } from "../hooks/useTrip.ts";
 import { useTabMemory } from "../hooks/useTabMemory.ts";
+import { useTripHistory } from "../hooks/useTripHistory.ts";
+import { historyValueLabel, historyEntrySentence } from "../utils/format.ts";
 
 // One owe-card with its own details modal. Defined at module level (NOT inside
 // TripView's render) so React keeps the same component instance across
@@ -145,7 +147,8 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
   // Trip Wrapped unlocks at trip end — or 5 days after creation when no end date is set.
   const wrappedAt = data ? (data.trip.end_date ? `${data.trip.end_date}T23:59:59` : new Date(new Date(data.trip.created_at).getTime() + 5 * 86400e3).toISOString()) : "";
   const wrappedLive = data ? (data.trip.fun_leaderboard && Date.now() >= Date.parse(wrappedAt)) : false;
-  const { tab, setTab } = useTabMemory<"expenses" | "owed" | "youowe" | "fun">(token, ["expenses", "owed", "youowe", "fun"], "owed", wrappedLive);
+  const { tab, setTab } = useTabMemory<"expenses" | "owed" | "youowe" | "fun" | "history">(token, ["expenses", "owed", "youowe", "fun", "history"], "owed", wrappedLive);
+  const { history } = useTripHistory(token);
 
   if (needsPassword) {
     return (
@@ -331,7 +334,8 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
         ["expenses", "Expenses"],
         ["owed", "Who owes you"],
         ["youowe", "Who you owe"],
-        ...(wrappedLive ? [["fun", "🎁 Wrapped"] as const] : []),
+        ...(wrappedLive ? [["fun", "Wrapped"] as const] : []),
+        ["history", "History"],
       ]} />
       {(tab === "owed" || tab === "youowe") && (() => {
         const oweYou = data.balances.filter((p) => p.to === me?.id);
@@ -438,6 +442,23 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
       {tab === "fun" && <Awards title="Trip Wrapped" awards={data.fun?.awards ?? null}
         review={data.fun?.review} currency={t.settle_currency}
         onReplay={data.fun?.review ? () => { markGiftSeen(`wts_reviewed_${token}`); setShowReview(true); } : undefined} />}
+
+      {tab === "history" && (
+        <div className="card">
+          <h2 style={{ marginTop: 0 }}>Every change, newest first</h2>
+          {history.length === 0 && <p className="muted">No changes recorded yet.</p>}
+          {history.length > 0 && history.map((h) => (
+            <div key={h.id} className="expense-row" style={{ alignItems: "flex-start" }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <span>{historyEntrySentence(h)}</span>
+              </div>
+              <span className="muted" style={{ whiteSpace: "nowrap" }}>
+                {new Date(h.created_at).toLocaleDateString()}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {wrappedLive && wantsGift(`wts_reviewed_${token}`) && !showReview && (
         <GiftPrompt title="Trip Wrapped"

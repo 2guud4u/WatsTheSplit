@@ -1,10 +1,10 @@
 import { db, stmt } from "./db.ts";
-import type { ErrorCode } from "../shared/wire.ts";
+import type { ErrorCode, HistoryEntry, HistoryValue } from "../shared/wire.ts";
 import { decimals, isCurrency, CURRENCIES } from "./currencies.ts";
 import { crossRate, latestProviderTimestamp } from "./fx.ts";
 import { effectiveShares, expensePayload, tripBalances, journeyBalance, journeyTrips, journeyPeople, loadTripRows, loadJourneyRows, type JourneyMember } from "./ledger.ts";
 import * as notify from "./notify.ts";
-import { mutate, mutateTrip, mutateJourney, edited, lockRate, abort } from "./mutate.ts";
+import { mutate, mutateTrip, mutateJourney, edited, lockRate, abort, logChange, logField } from "./mutate.ts";
 import { funBoard, journeyBoard } from "./wrapped.ts";
 import { createAuth, type Mailer } from "./auth.ts";
 import {
@@ -43,7 +43,7 @@ const qTrip = { get: (t: string) => stmt<Trip, [string]>("SELECT * FROM trips WH
 const qJourney = { get: (t: string) => stmt<Journey, [string]>("SELECT * FROM journeys WHERE token = ?").get(t) };
 const qSession = { get: (t: string) => stmt<Session, [string]>("SELECT token, user_sub FROM sessions WHERE token = ?").get(t) };
 const qExpense = { get: (id: string) => stmt<ExpenseRow, [string]>("SELECT * FROM expenses WHERE id = ?").get(id) };
-const qItem = { get: (id: string) => stmt<{ id: string; expense_id: string }, [string]>("SELECT id, expense_id FROM items WHERE id = ?").get(id) };
+const qItem = { get: (id: string) => stmt<{ id: string; expense_id: string; name: string; price_minor: number }, [string]>("SELECT id, expense_id, name, price_minor FROM items WHERE id = ?").get(id) };
 const qPhoto = { get: (id: string) => stmt<{ id: string; expense_id: string; mime: string; data: Uint8Array }, [string]>("SELECT id, expense_id, mime, data FROM expense_photos WHERE id = ?").get(id) };
 const qSettlement = { get: (id: string) => stmt<{ id: string; trip_token: string }, [string]>("SELECT id, trip_token FROM settlements WHERE id = ?").get(id) };
 
@@ -223,6 +223,35 @@ const routes: Route[] = [
         ? { rate: 1, providerTimestamp: null }
         : crossRate(t.trip_currency, t.settle_currency),
       fun: t.fun_leaderboard ? funBoard(rows) : null,
+    });
+  }],
+
+  [/^\/api\/trips\/([A-Za-z0-9]+)\/history$/, "GET", async (_req, m, _body, s) => {
+    const o = resolveTrip(s, { trip: m[1] }, "view");
+    if (o instanceof Response) return o;
+    const rows = db.query<
+      { id: string; entity_type: string; entity_id: string; entity_name: string; kind: string; field: string | null; old_value: string | null; new_value: string | null; by: string | null; created_at: string },
+      [string]
+    >(
+      "SELECT * FROM expense_history WHERE trip_token = ? ORDER BY created_at DESC",
+    ).all(m[1]);
+    // Legacy rows (pre-structured) hold plain text; treat those as text values.
+    const parse = (s: string | null): HistoryValue | null => {
+      if (s === null) return null;
+      try {
+        const v = JSON.parse(s);
+        if (v && typeof v === "object" && typeof v.kind === "string") return v as HistoryValue;
+        return { kind: "text", text: s };
+      } catch {
+        return { kind: "text", text: s };
+      }
+    };
+    return json({
+      history: rows.map((r) => ({
+        ...r,
+        old_value: parse(r.old_value),
+        new_value: parse(r.new_value),
+      })),
     });
   }],
 
@@ -418,6 +447,7 @@ const routes: Route[] = [
           [id, mm.id]);
       }
       lockRate(id, currency, t.settle_currency);
+      logChange(t.token, { type: "expense", id, name }, "created", null, null, null, me?.name ?? null);
       return json({ id });
     });
   }],
@@ -446,7 +476,18 @@ const routes: Route[] = [
     const g = resolveTrip(s, { expense: e.id }, "edit");
     if (g instanceof Response) return g;
     const { trip: t, me } = g;
+    const before = {
+      name: { kind: "text" as const, text: e.name },
+      total_minor: { kind: "amount" as const, amount_minor: e.total_minor, currency: e.currency },
+      payer_member_id: e.payer_member_id
+        ? { kind: "member" as const, member_id: e.payer_member_id, member_name: qMember.get(e.payer_member_id)?.name ?? "" }
+        : { kind: "none" as const },
+      category: { kind: "text" as const, text: e.category ?? "" },
+      currency: { kind: "text" as const, text: e.currency },
+      paid_out: { kind: "boolean" as const, value: db.query<{ paid: number }, [string]>("SELECT paid FROM expense_participants WHERE expense_id = ? AND paid = 1 LIMIT 1").get(e.id)?.paid ?? 0 > 0 },
+    };
     return mutateTrip(t.token, () => {
+      const entity = { type: "expense" as const, id: e.id, name: e.name };
       if (body.name !== undefined) db.run("UPDATE expenses SET name = ? WHERE id = ?", [String(body.name), e.id]);
       if (body.total_minor !== undefined) {
         const v = Number(body.total_minor);
@@ -483,6 +524,22 @@ const routes: Route[] = [
           lockRate(e.id, c, t.settle_currency); // re-lock rate for the new currency
         }
       }
+      const after = db.query<{ name: string; total_minor: number; payer_member_id: string | null; category: string | null; currency: string }, [string]>("SELECT name, total_minor, payer_member_id, category, currency FROM expenses WHERE id = ?").get(e.id)!;
+      const afterSnap = {
+        name: { kind: "text" as const, text: after.name },
+        total_minor: { kind: "amount" as const, amount_minor: after.total_minor, currency: after.currency },
+        payer_member_id: after.payer_member_id
+          ? { kind: "member" as const, member_id: after.payer_member_id, member_name: qMember.get(after.payer_member_id)?.name ?? "" }
+          : { kind: "none" as const },
+        category: { kind: "text" as const, text: after.category ?? "" },
+        currency: { kind: "text" as const, text: after.currency },
+      };
+      for (const field of ["name", "total_minor", "payer_member_id", "category", "currency"] as const)
+        logField(t.token, entity, before, afterSnap, field, me?.name ?? null);
+      if (body.paid_out !== undefined) {
+        const afterPaid = db.query<{ paid: number }, [string]>("SELECT paid FROM expense_participants WHERE expense_id = ? AND paid = 1 LIMIT 1").get(e.id)?.paid ?? 0 > 0;
+        logField(t.token, entity, { paid_out: before.paid_out }, { paid_out: { kind: "boolean" as const, value: afterPaid } }, "paid_out", me?.name ?? null);
+      }
       edited(e, me?.name ?? null);
       return json({ ok: true });
     });
@@ -494,6 +551,7 @@ const routes: Route[] = [
     const e = qExpense.get(m[1])!;
     return mutateTrip(o.trip.token, () => {
       db.run("DELETE FROM expenses WHERE id = ?", [e.id]);
+      logChange(o.trip.token, { type: "expense", id: e.id, name: e.name }, "deleted", null, null, null, o.me?.name ?? null);
       return json({ ok: true });
     });
   }],
@@ -509,9 +567,16 @@ const routes: Route[] = [
     const mem = qMember.get(mid);
     if (!mem || mem.trip_token !== t.token) return err(404, "member_not_found");
     if (me?.id !== e.payer_member_id && me?.id !== mid) return err(403, "payer_or_self_only");
+    const before = db.query<{ paid: number }, [string, string]>("SELECT paid FROM expense_participants WHERE expense_id = ? AND member_id = ?").get(e.id, mid)?.paid ?? 0;
     return mutateTrip(t.token, () => {
       db.run("INSERT OR IGNORE INTO expense_participants (expense_id, member_id, share_minor, paid) VALUES (?,?,NULL,0)", [e.id, mid]);
       db.run("UPDATE expense_participants SET paid = ? WHERE expense_id = ? AND member_id = ?", [body.paid ? 1 : 0, e.id, mid]);
+      const after = db.query<{ paid: number }, [string, string]>("SELECT paid FROM expense_participants WHERE expense_id = ? AND member_id = ?").get(e.id, mid)?.paid ?? 0;
+      const entity = { type: "expense" as const, id: e.id, name: e.name };
+      logChange(t.token, entity, "changed", "paid",
+        { kind: "member_flag", member_id: mid, member_name: mem.name, flag: before > 0, on_label: "paid", off_label: "unpaid" },
+        { kind: "member_flag", member_id: mid, member_name: mem.name, flag: after > 0, on_label: "paid", off_label: "unpaid" },
+        me?.name ?? null);
       return json({ ok: true });
     });
   }],
@@ -534,6 +599,11 @@ const routes: Route[] = [
         db.run(`DELETE FROM item_sharers WHERE member_id = ? AND item_id IN
           (SELECT id FROM items WHERE expense_id = ?)`, [memberId, e.id]);
       }
+      const entity = { type: "expense" as const, id: e.id, name: e.name };
+      logChange(t.token, entity, "changed", "participants",
+        { kind: "member_flag", member_id: memberId, member_name: mem.name, flag: !on, on_label: "in", off_label: "out" },
+        { kind: "member_flag", member_id: memberId, member_name: mem.name, flag: on, on_label: "in", off_label: "out" },
+        me?.name ?? null);
       edited(e, me?.name ?? null);
       return json({ ok: true });
     });
@@ -549,12 +619,19 @@ const routes: Route[] = [
     const value = body.share_minor === null ? null : Number(body.share_minor);
     const mem = qMember.get(memberId);
     if (!mem || mem.trip_token !== t.token) return err(404, "member_not_found");
+    const before = db.query<{ share_minor: number | null }, [string, string]>("SELECT share_minor FROM expense_participants WHERE expense_id = ? AND member_id = ?").get(e.id, memberId)?.share_minor ?? null;
     return mutateTrip(t.token, () => {
       db.run(
         `INSERT INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,?)
          ON CONFLICT(expense_id, member_id) DO UPDATE SET share_minor = excluded.share_minor`,
         [e.id, memberId, value],
       );
+      const after = db.query<{ share_minor: number | null }, [string, string]>("SELECT share_minor FROM expense_participants WHERE expense_id = ? AND member_id = ?").get(e.id, memberId)?.share_minor ?? null;
+      const entity = { type: "expense" as const, id: e.id, name: e.name };
+      logChange(t.token, entity, "changed", "share",
+        { kind: "share", member_id: memberId, member_name: mem.name, amount_minor: before, currency: e.currency },
+        { kind: "share", member_id: memberId, member_name: mem.name, amount_minor: after, currency: e.currency },
+        me?.name ?? null);
       edited(e, me?.name ?? null);
       return json({ ok: true });
     });
@@ -610,6 +687,8 @@ const routes: Route[] = [
           upd.run(e.id, p.member_id, add);
         }
       } else return err(400, "bad_split_type");
+      const entity = { type: "expense" as const, id: e.id, name: e.name };
+      logChange(t.token, entity, "changed", "split", null, { kind: "split", type }, me?.name ?? null);
       edited(e, me?.name ?? null);
       return json({ ok: true });
     });
@@ -637,6 +716,8 @@ const routes: Route[] = [
         db.run("INSERT OR IGNORE INTO item_sharers (item_id, member_id) VALUES (?,?)", [itemId, mid]);
         db.run("INSERT OR IGNORE INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,NULL)", [e.id, mid]);
       }
+      const entity = { type: "expense" as const, id: e.id, name: e.name };
+      logChange(t.token, entity, "changed", "items", null, { kind: "text", text: `item ${name}` }, me?.name ?? null);
       edited(e, me?.name ?? null);
       return json({ id: itemId });
     });
@@ -663,6 +744,8 @@ const routes: Route[] = [
           db.run("INSERT OR IGNORE INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,NULL)", [e.id, mid]);
         }
       }
+      const entity = { type: "expense" as const, id: e.id, name: e.name };
+      logChange(o.trip.token, entity, "changed", "items", { kind: "text", text: "edited" }, { kind: "text", text: `item ${item.name}` }, o.me?.name ?? null);
       edited(e, o.me?.name ?? null);
       return json({ ok: true });
     });
@@ -671,8 +754,12 @@ const routes: Route[] = [
   [/^\/api\/items\/([A-Za-z0-9-]+)$/, "DELETE", async (_req, m, _body, s) => {
     const o = resolveTrip(s, { item: m[1] }, "edit");
     if (o instanceof Response) return o;
+    const item = qItem.get(m[1])!;
+    const e = qExpense.get(item.expense_id)!;
     return mutateTrip(o.trip.token, () => {
       db.run("DELETE FROM items WHERE id = ?", [m[1]]);
+      const entity = { type: "expense" as const, id: e.id, name: e.name };
+      logChange(o.trip.token, entity, "changed", "items", null, { kind: "text", text: `item ${item.name}` }, o.me?.name ?? null);
       return json({ ok: true });
     });
   }],
@@ -693,6 +780,8 @@ const routes: Route[] = [
     return mutateTrip(o.trip.token, () => {
       db.run("INSERT INTO expense_photos (id, expense_id, mime, data, created_at) VALUES (?,?,?,?,?)",
         [id, e.id, mime, buf, now()]);
+      const entity = { type: "expense" as const, id: e.id, name: e.name };
+      logChange(o.trip.token, entity, "changed", "photos", null, { kind: "text", text: "photo added" }, me?.name ?? null);
       edited(e, me?.name ?? null);
       return json({ id });
     });
@@ -714,6 +803,8 @@ const routes: Route[] = [
     const e = qExpense.get(p.expense_id)!;
     return mutateTrip(o.trip.token, () => {
       db.run("DELETE FROM expense_photos WHERE id = ?", [p.id]);
+      const entity = { type: "expense" as const, id: e.id, name: e.name };
+      logChange(o.trip.token, entity, "changed", "photos", null, { kind: "text", text: "photo removed" }, o.me?.name ?? null);
       edited(e, o.me?.name ?? null);
       return json({ ok: true });
     });
@@ -732,9 +823,11 @@ const routes: Route[] = [
     const amount = Number(body.amount_minor);
     if (!Number.isFinite(amount) || amount <= 0) return err(400, "bad_amount");
     const id = crypto.randomUUID();
+    const sName = `${from.name} paid ${to.name}`;
     return mutateTrip(t.token, () => {
       db.run("INSERT INTO settlements (id, trip_token, from_member, to_member, amount_minor, created_at, created_by) VALUES (?,?,?,?,?,?,?)",
         [id, t.token, from.id, to.id, amount, now(), me?.name ?? null]);
+      logChange(t.token, { type: "settlement", id, name: sName }, "created", null, null, null, me?.name ?? null);
       return json({ id });
     });
   }],
@@ -742,8 +835,13 @@ const routes: Route[] = [
   [/^\/api\/settlements\/([A-Za-z0-9-]+)$/, "DELETE", async (_req, m, _body, s) => {
     const o = resolveTrip(s, { settlement: m[1] }, "edit");
     if (o instanceof Response) return o;
+    const st = db.query<{ id: string; from_member: string; to_member: string }, [string]>("SELECT id, from_member, to_member FROM settlements WHERE id = ?").get(m[1])!;
+    const from = qMember.get(st.from_member);
+    const to = qMember.get(st.to_member);
+    const sName = `${from?.name ?? "?"} paid ${to?.name ?? "?"}`;
     return mutateTrip(o.trip.token, () => {
       db.run("DELETE FROM settlements WHERE id = ?", [m[1]]);
+      logChange(o.trip.token, { type: "settlement", id: st.id, name: sName }, "deleted", null, null, null, o.me?.name ?? null);
       return json({ ok: true });
     });
   }],
