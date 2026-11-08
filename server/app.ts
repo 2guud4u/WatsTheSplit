@@ -193,6 +193,7 @@ const routes: Route[] = [
       access: o.edit ? "edit" : "view",
       signed_in: !!s.user_sub,
       is_creator: t.created_by_token !== null && t.created_by_token === s.token,
+      creator_id: t.created_by_member_id,
       members: members.map((mm) => ({
         id: mm.id, name: mm.name, linked: !!mm.user_sub,
         used: memberIsUsed(t.token, mm.id), opted_out_fun: !!mm.opted_out_fun,
@@ -348,6 +349,10 @@ const routes: Route[] = [
       }
       db.run("INSERT OR REPLACE INTO claims (session_token, trip_token, member_id) VALUES (?,?,?)",
         [s.token, t.token, member.id]);
+      // the creator's claim (or first re-claim after the creator is gone) fixes the owner's Member
+      if (t.created_by_token === s.token && t.created_by_member_id !== member.id) {
+        db.run("UPDATE trips SET created_by_member_id = ? WHERE token = ?", [member.id, t.token]);
+      }
       // claiming grants edit access even for journey viewers (they never typed the password)
       grantConsent(s, t);
       return json({ ok: true, member_id: member.id });

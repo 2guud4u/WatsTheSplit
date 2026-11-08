@@ -119,6 +119,7 @@ export type TripView = {
   access: "edit" | "view";
   signed_in: boolean;
   is_creator: boolean;
+  creator_id: string | null;
   members: TripMember[];
   balances: BalancePair[];
   journey: { token: string; name: string } | null;

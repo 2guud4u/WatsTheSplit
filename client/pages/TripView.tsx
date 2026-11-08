@@ -93,9 +93,10 @@ function ClaimCard({ data, readOnly, requestSwitch, load, reloadMe,
       </p>
       <div className="row" style={{ marginBottom: 10 }}>
         {data.members.map((m) => m.is_me ? (
-          <SelfChip key={m.id} name={m.name} linked={m.linked} />
+          <SelfChip key={m.id} name={m.name} linked={m.linked} crown={m.id === data.creator_id} />
         ) : (
           <PickChip key={m.id} name={m.name} linked={m.linked}
+            crown={m.id === data.creator_id}
             disabled={m.linked}
             onClick={() => requestSwitch({ member_id: m.id }, m.name)} />
         ))}
@@ -277,7 +278,7 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
 
       {readOnly && !me && <ClaimCard {...claimProps} />}
       <div className="row" style={{ marginBottom: 12 }}>
-        {me && <SelfChip name={me.name} linked={me.linked} />}
+        {me && <SelfChip name={me.name} linked={me.linked} crown={me.id === data.creator_id} />}
         {me && (
           <button className="link" onClick={() => setSwitching(true)}>Not {me.name}?</button>
         )}

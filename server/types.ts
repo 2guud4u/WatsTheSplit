@@ -8,6 +8,7 @@ export type Trip = {
   password_text: string | null;
   created_at: string;
   password_ver: number; fun_leaderboard: number; created_by_token: string | null;
+  created_by_member_id: string | null;
 };
 export type Journey = { token: string; name: string; settle_currency: string; created_at: string; fun_leaderboard?: number };
 export type ExpenseRow = {

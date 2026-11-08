@@ -192,6 +192,11 @@ if (!db.query("SELECT 1 FROM pragma_table_info('trips') WHERE name='fun_leaderbo
 if (!db.query("SELECT 1 FROM pragma_table_info('trips') WHERE name='created_by_token'").get()) {
   db.exec("ALTER TABLE trips ADD COLUMN created_by_token TEXT");
 }
+if (!db.query("SELECT 1 FROM pragma_table_info('trips') WHERE name='created_by_member_id'").get()) {
+  db.exec("ALTER TABLE trips ADD COLUMN created_by_member_id TEXT");
+}
+// backfill: owner's member = the member the creator session claimed (if any)
+db.exec(`UPDATE trips SET created_by_member_id = (SELECT c.member_id FROM claims c WHERE c.trip_token = trips.token AND c.session_token = trips.created_by_token) WHERE created_by_member_id IS NULL AND created_by_token IS NOT NULL`);
 
 if (!db.query("SELECT 1 FROM pragma_table_info('members') WHERE name='opted_out_fun'").get()) {
   db.exec("ALTER TABLE members ADD COLUMN opted_out_fun INTEGER NOT NULL DEFAULT 0");
