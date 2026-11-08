@@ -1,6 +1,6 @@
-import { api } from "../api.ts";
-import type { AccessibleTrip, NewTrip, NewJourney, TripSummary, JourneySummary } from "../api.ts";
-import { addRecent } from "../types.ts";
+import { api } from "./api.ts";
+import type { AccessibleTrip, NewTrip, NewJourney, TripSummary, JourneySummary } from "./api.ts";
+import { addRecent } from "../utils/types.ts";
 
 // Home screen model: the create-trip / create-journey / sign-out calls plus the
 // suggestion + my-trips fetches the view's panels need. Fetch errors surface as

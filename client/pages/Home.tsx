@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from "react";
-import { Config, Me } from "../api.ts";
-import type { AccessibleTrip, TripSummary, JourneySummary } from "../api.ts";
-import { getRecent } from "../types.ts";
-import { CurrencyPicker } from "../ui/CurrencyPicker.tsx";
-import { SignInButton } from "../ui/SignIn.tsx";
-import { RangePicker } from "../ui/RangePicker.tsx";
+import { Config, Me } from "../services/api.ts";
+import type { AccessibleTrip, TripSummary, JourneySummary } from "../services/api.ts";
+import { getRecent } from "../utils/types.ts";
+import { CurrencyPicker } from "../components/CurrencyPicker.tsx";
+import { SignInButton } from "../components/SignIn.tsx";
+import { RangePicker } from "../components/RangePicker.tsx";
 import type { DateRange } from "react-day-picker";
-import { homeActions } from "./model.ts";
+import { homeActions } from "../services/homeActions.ts";
 
 export default function Home({ config, me, reloadMe }: { config: Config | null; me: Me; reloadMe: () => void }) {
   const [name, setName] = useState("");

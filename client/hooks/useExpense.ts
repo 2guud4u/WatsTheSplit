@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "../api.ts";
-import type { ExpenseView, ExpensePatch, ItemPatch, NewItem, SplitInput } from "../api.ts";
-import { useTripEvents } from "../hooks.ts";
+import { api } from "../services/api.ts";
+import type { ExpenseView, ExpensePatch, ItemPatch, NewItem, SplitInput } from "../services/api.ts";
+import { useTripEvents } from "./useTripEvents.ts";
 
 // Expense screen model: fetches the ExpenseView, live-reloads off the trip's
 // event stream, and wraps every mutation the view can trigger. A failed fetch

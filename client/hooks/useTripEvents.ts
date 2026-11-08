@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "./api.ts";
+import { api } from "../services/api.ts";
 
 // Live-reload: re-run `load` on every change to the given trips (SSE from
 // other clients plus our own mutation echo). Omit tokens when unknown yet

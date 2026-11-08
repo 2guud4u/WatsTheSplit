@@ -1,18 +1,18 @@
 import React, { useState } from "react";
-import { BASE, describeError } from "../api.ts";
-import { useTabMemory } from "../use-tab-memory.ts";
-import type { JourneyView as JourneyData, JourneyTrip as JTrip, JourneySettingsPatch, Transfer } from "../api.ts";
-import { fmtUnits, fmt, flag, decimals } from "../format.ts";
-import { ShareLink } from "../ui/ShareLink.tsx";
-import { OweCard } from "../ui/OweCard.tsx";
-import { OweDetailsModal } from "../ui/OweDetailsModal.tsx";
-import { SignInButton } from "../ui/SignIn.tsx";
-import { Awards } from "../ui/Awards.tsx";
-import { FunNotice } from "../ui/FunNotice.tsx";
-import { PickChip, SelfChip } from "../ui/Chips.tsx";
-import { PageHead, Tabs } from "../ui/PageHead.tsx";
-import { Review, GiftPrompt, wantsGift, markGiftSeen } from "../ui/Review.tsx";
-import { useJourney } from "./model.ts";
+import { BASE, describeError } from "../services/api.ts";
+import { useTabMemory } from "../hooks/useTabMemory.ts";
+import type { JourneyView as JourneyData, JourneyTrip as JTrip, JourneySettingsPatch, Transfer } from "../services/api.ts";
+import { fmtUnits, fmt, flag, decimals } from "../utils/format.ts";
+import { ShareLink } from "../components/ShareLink.tsx";
+import { OweCard } from "../components/OweCard.tsx";
+import { OweDetailsModal } from "../components/OweDetailsModal.tsx";
+import { SignInButton } from "../components/SignIn.tsx";
+import { Awards } from "../components/Awards.tsx";
+import { FunNotice } from "../components/FunNotice.tsx";
+import { PickChip, SelfChip } from "../components/Chips.tsx";
+import { PageHead, Tabs } from "../components/PageHead.tsx";
+import { Review, GiftPrompt, wantsGift, markGiftSeen } from "../components/Review.tsx";
+import { useJourney } from "../hooks/useJourney.ts";
 
 export default function JourneyView({ token, reloadMe }: { token: string; reloadMe: () => void }) {
   const [addOpen, setAddOpen] = useState(false);

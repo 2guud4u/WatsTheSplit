@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "../api.ts";
-import type { TripView, TripSettingsPatch, ClaimInput, NewExpense, NewSettlement, ExpensePatch } from "../api.ts";
-import { addRecent } from "../types.ts";
-import { useTripEvents } from "../hooks.ts";
+import { api } from "../services/api.ts";
+import type { TripView, TripSettingsPatch, ClaimInput, NewExpense, NewSettlement, ExpensePatch } from "../services/api.ts";
+import { addRecent } from "../utils/types.ts";
+import { useTripEvents } from "./useTripEvents.ts";
 
 // Trip screen model: owns the TripView fetch (incl. the password gate and the
 // ?pw= share-link probe), live-reload wiring, and every mutation the view can

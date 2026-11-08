@@ -1,6 +1,6 @@
 import React, { useState } from "react";
-import type { Award, TripReview } from "../api.ts";
-import { CATEGORIES, fmtUnits } from "../format.ts";
+import type { Award, TripReview } from "../services/api.ts";
+import { CATEGORIES, fmtUnits } from "../utils/format.ts";
 
 // Trip in Review: the Wrapped story — one stat or award per card, tapped
 // through like a story reel. Opens from the 🎁 prompt or the Wrapped-tab

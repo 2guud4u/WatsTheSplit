@@ -1,6 +1,6 @@
 import React from "react";
-import type { Award, TripReview } from "../api.ts";
-import { CATEGORIES, decimals, fmtUnits } from "../format.ts";
+import type { Award, TripReview } from "../services/api.ts";
+import { CATEGORIES, decimals, fmtUnits } from "../utils/format.ts";
 
 // Awards board shared by Trip Wrapped and Journey Wrapped: stats review on
 // top (the "Trip in Review" numbers), hero card + award grid below.

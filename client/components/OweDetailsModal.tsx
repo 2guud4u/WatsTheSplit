@@ -1,6 +1,6 @@
 import React from "react";
-import { fmt, fmtUnits, decimals } from "../format.ts";
-import type { SignedBalanceLogEntry } from "../api.ts";
+import { fmt, fmtUnits, decimals } from "../utils/format.ts";
+import type { SignedBalanceLogEntry } from "../services/api.ts";
 
 // The "how did this net come about" modal for an owe-card: the list of
 // entries (one per expense — share -> converted amount, optionally the rate

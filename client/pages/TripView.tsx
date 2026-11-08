@@ -1,22 +1,22 @@
 import React, { useState } from "react";
-import { BASE, Config, Me, describeError } from "../api.ts";
-import type { TripView as TripData, TripSettingsPatch, ClaimInput } from "../api.ts";
-import { toMinor, fmt, fmtUnits, decimals, flag, CATEGORIES } from "../format.ts";
-import { showSnack } from "../ui/Snack.tsx";
-import { CurrencyPicker } from "../ui/CurrencyPicker.tsx";
-import { OweCard, memberName } from "../ui/OweCard.tsx";
-import { OweDetailsModal } from "../ui/OweDetailsModal.tsx";
-import { SignInButton } from "../ui/SignIn.tsx";
-import { RangePicker } from "../ui/RangePicker.tsx";
+import { BASE, Config, Me, describeError } from "../services/api.ts";
+import type { TripView as TripData, TripSettingsPatch, ClaimInput } from "../services/api.ts";
+import { toMinor, fmt, fmtUnits, decimals, flag, CATEGORIES } from "../utils/format.ts";
+import { showSnack } from "../components/Snack.tsx";
+import { CurrencyPicker } from "../components/CurrencyPicker.tsx";
+import { OweCard, memberName } from "../components/OweCard.tsx";
+import { OweDetailsModal } from "../components/OweDetailsModal.tsx";
+import { SignInButton } from "../components/SignIn.tsx";
+import { RangePicker } from "../components/RangePicker.tsx";
 import type { DateRange } from "react-day-picker";
-import { ShareLink } from "../ui/ShareLink.tsx";
-import { Awards } from "../ui/Awards.tsx";
-import { FunNotice } from "../ui/FunNotice.tsx";
-import { PickChip, SelfChip } from "../ui/Chips.tsx";
-import { PageHead, Tabs } from "../ui/PageHead.tsx";
-import { Review, GiftPrompt, wantsGift, markGiftSeen } from "../ui/Review.tsx";
-import { useTrip } from "./model.ts";
-import { useTabMemory } from "../use-tab-memory.ts";
+import { ShareLink } from "../components/ShareLink.tsx";
+import { Awards } from "../components/Awards.tsx";
+import { FunNotice } from "../components/FunNotice.tsx";
+import { PickChip, SelfChip } from "../components/Chips.tsx";
+import { PageHead, Tabs } from "../components/PageHead.tsx";
+import { Review, GiftPrompt, wantsGift, markGiftSeen } from "../components/Review.tsx";
+import { useTrip } from "../hooks/useTrip.ts";
+import { useTabMemory } from "../hooks/useTabMemory.ts";
 
 // One owe-card with its own details modal. Defined at module level (NOT inside
 // TripView's render) so React keeps the same component instance across

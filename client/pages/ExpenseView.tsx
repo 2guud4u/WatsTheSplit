@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from "react";
-import { api } from "../api.ts";
-import type { ExpenseView as ExpenseData } from "../api.ts";
-import { toMinor, fmt, decimals, CATEGORIES, CURRENCY_COUNTRIES } from "../format.ts";
-import { CurrencyPicker } from "../ui/CurrencyPicker.tsx";
-import { PageHead } from "../ui/PageHead.tsx";
-import { useExpense } from "./model.ts";
+import { api } from "../services/api.ts";
+import type { ExpenseView as ExpenseData } from "../services/api.ts";
+import { toMinor, fmt, decimals, CATEGORIES, CURRENCY_COUNTRIES } from "../utils/format.ts";
+import { CurrencyPicker } from "../components/CurrencyPicker.tsx";
+import { PageHead } from "../components/PageHead.tsx";
+import { useExpense } from "../hooks/useExpense.ts";
 
 const COLORS = ["#b56a4c","#7a9b6d","#c9a25e","#8f7fae","#b07575","#7d9aa8","#c9b458","#a08a6e"];
 function Pie({ slices, total }: { slices: { label: string; value: number; i: number }[]; total: number }) {

@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { createRoot } from "react-dom/client";
-import { api, Config, Me, isApiError, describeError } from "./api.ts";
-import TripView from "./trip/view.tsx";
-import ExpenseView from "./expense/view.tsx";
-import JourneyView from "./journey/view.tsx";
-import Home from "./home/view.tsx";
-import "./styles.css";
-import SnackRoot from "./ui/Snack.tsx";
+import { api, Config, Me, isApiError, describeError } from "./services/api.ts";
+import TripView from "./pages/TripView.tsx";
+import ExpenseView from "./pages/ExpenseView.tsx";
+import JourneyView from "./pages/JourneyView.tsx";
+import Home from "./pages/Home.tsx";
+import "./styles/global.css";
+import SnackRoot from "./components/Snack.tsx";
+import { route } from "./routes.ts";
 import "react-day-picker/style.css";
 
 // Mutations that fail without a local handler shouldn't die silently —
@@ -18,8 +19,6 @@ addEventListener("unhandledrejection", (ev: PromiseRejectionEvent) => {
     alert(describeError(ev.reason));
   }
 });
-
-const route = () => location.hash.slice(1).split("?")[0] || "/";
 
 // ---------- App ----------
 function App() {

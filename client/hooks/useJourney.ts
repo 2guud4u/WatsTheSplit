@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "../api.ts";
-import type { JourneyView, JourneySettingsPatch, TransferPart } from "../api.ts";
-import { useTripEvents } from "../hooks.ts";
+import { api } from "../services/api.ts";
+import type { JourneyView, JourneySettingsPatch, TransferPart } from "../services/api.ts";
+import { useTripEvents } from "./useTripEvents.ts";
 
 // Journey screen model: fetches the JourneyView, live-reloads off every member
 // trip's event stream, and wraps every mutation the view can trigger. `err`

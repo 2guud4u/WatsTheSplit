@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { rememberedTab, rememberTab } from "./tab-memory.ts";
+import { rememberedTab, rememberTab } from "../utils/tabMemory.ts";
 
 // The last-selected tab per screen (keyed by token), session-only, plus a
 // fallback: a remembered "fun" tab is shown, but a remembered "fun" falls back
