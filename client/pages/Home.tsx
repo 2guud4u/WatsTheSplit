@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Config, Me } from "../services/api.ts";
+import type { Config, Me } from "../services/api.ts";
 import type { AccessibleTrip, TripSummary, JourneySummary } from "../services/api.ts";
 import { getRecent } from "../utils/types.ts";
 import { CurrencyPicker } from "../components/CurrencyPicker.tsx";

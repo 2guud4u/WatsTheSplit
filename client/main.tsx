@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { createRoot } from "react-dom/client";
-import { api, Config, Me, isApiError, describeError } from "./services/api.ts";
+import { api, isApiError, describeError, type Config, type Me } from "./services/api.ts";
 import TripView from "./pages/TripView.tsx";
 import ExpenseView from "./pages/ExpenseView.tsx";
 import JourneyView from "./pages/JourneyView.tsx";

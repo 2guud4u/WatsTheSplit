@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { BASE, Config, describeError } from "../services/api.ts";
+import { BASE, describeError, type Config } from "../services/api.ts";
 import type { TripView as TripData, TripSettingsPatch, ClaimInput } from "../services/api.ts";
 import { toMinor, fmt, fmtUnits, decimals, flag, CATEGORIES } from "../utils/format.ts";
 import { showSnack } from "../components/Snack.tsx";
