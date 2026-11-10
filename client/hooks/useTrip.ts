@@ -29,7 +29,7 @@ export function useTrip(token: string) {
       // anonymous sessions and consent could land on the losing cookie.
       const m = /\?pw=([^&]*)/.exec(location.hash);
       if (m) {
-        const pw = decodeURIComponent(m[1]);
+        const pw = decodeURIComponent(m[1] ?? "");
         history.replaceState(null, "", location.pathname + location.search + location.hash.replace(/\?pw=[^&]*/, ""));
         await api.call("POST /api/trips/:trip/password", { trip: token, password: pw }).catch(() => {});
       }

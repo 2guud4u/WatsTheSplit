@@ -9,7 +9,7 @@ export function routes(ctx: RouteCtx): Route[] {
   const { json, err, now, qMember, memberIsUsed, nameTaken } = ctx;
   return [
     [/^\/api\/trips\/([A-Za-z0-9]+)\/claim$/, "POST", async (_req, m, body, s) => {
-      const o = resolveTrip(s, { trip: m[1] }, "view");
+      const o = resolveTrip(s, { trip: m[1] ?? "" }, "view");
       if (o instanceof Response) return o;
       const t = o.trip;
       const memberId = String(body.member_id ?? "");
@@ -53,7 +53,7 @@ export function routes(ctx: RouteCtx): Route[] {
       });
     }],
     [/^\/api\/trips\/([A-Za-z0-9]+)\/members$/, "POST", async (_req, m, body, s) => {
-      const o = resolveTrip(s, { trip: m[1] }, "edit");
+      const o = resolveTrip(s, { trip: m[1] ?? "" }, "edit");
       if (o instanceof Response) return o;
       const name = String(body.name ?? "").trim();
       if (!name) return err(400, "name_required");
@@ -66,7 +66,7 @@ export function routes(ctx: RouteCtx): Route[] {
       });
     }],
     [/^\/api\/members\/([A-Za-z0-9-]+)$/, "PATCH", async (_req, m, body, s) => {
-      const mem = qMember.get(m[1]);
+      const mem = qMember.get(m[1] ?? "");
       if (!mem) return err(404, "member_not_found");
       const o = resolveTrip(s, { trip: mem.trip_token }, "edit");
       if (o instanceof Response) return o;
@@ -110,9 +110,9 @@ export function routes(ctx: RouteCtx): Route[] {
       });
     }],
     [/^\/api\/members\/([A-Za-z0-9-]+)$/, "DELETE", async (_req, m, _body, s) => {
-      const o = resolveTrip(s, { member: m[1] }, "edit");
+      const o = resolveTrip(s, { member: m[1] ?? "" }, "edit");
       if (o instanceof Response) return o;
-      const mem = qMember.get(m[1])!;
+      const mem = qMember.get(m[1] ?? "")!;
       if (memberIsUsed(mem.trip_token, mem.id)) return err(400, "member_in_use");
       if (mem.id === o.me?.id) return err(400, "cannot_remove_self");
       return mutateTrip(mem.trip_token, () => {

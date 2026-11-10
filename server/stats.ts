@@ -63,7 +63,7 @@ export const add = (rec: Record<string, number>, k: string, v: number) => { rec[
 function* subsets(ids: string[], size: number): Generator<string[]> {
   const idx: number[] = [];
   function* rec(start: number): Generator<string[]> {
-    if (idx.length === size) { yield idx.map((i) => ids[i]); return; }
+    if (idx.length === size) { yield idx.map((i) => ids[i] ?? ""); return; }
     for (let i = start; i <= ids.length - (size - idx.length); i++) {
       idx.push(i); yield* rec(i + 1); idx.pop();
     }
@@ -177,7 +177,7 @@ export function mergeInto(dst: TripStats, src: TripStats, keyOf: (id: string) =>
   }
   for (const [k, v] of Object.entries(src.catShare)) {
     const [cat, mid] = k.split(">");
-    add(dst.catShare, `${cat}>${keyOf(mid)}`, v);
+    add(dst.catShare, `${cat}>${keyOf(mid ?? "")}`, v);
   }
   for (const [k, v] of Object.entries(src.catTotal)) add(dst.catTotal, k, v);
   for (const f of ["pairShare", "tripleShare", "quadShare", "settlePair", "settleSum", "duoOnly", "trioOnly"] as const)
@@ -211,7 +211,7 @@ export function mergeInto(dst: TripStats, src: TripStats, keyOf: (id: string) =>
   for (const [k, v] of Object.entries(src.itemLines)) add(dst.itemLines, keyOf(k), v);
   for (const [k, v] of Object.entries(src.memberDay)) {
     const [mid, day] = k.split(">");
-    add(dst.memberDay, `${keyOf(mid)}>${day}`, v);
+    add(dst.memberDay, `${keyOf(mid ?? "")}>${day}`, v);
   }
   for (const [k, set] of Object.entries(src.currencies)) {
     const nk = keyOf(k);
@@ -261,7 +261,8 @@ export type Entity = { key: string; name: string; views: number };
 
 export function top(rec: Record<string, number>, min = 0): { key: string; v: number } | null {
   let best: { key: string; v: number } | null = null;
-  for (const k of Object.keys(rec))
-    if (rec[k] > (best?.v ?? min)) best = { key: k, v: rec[k] };
+  for (const k of Object.keys(rec)) {
+    const v = rec[k] ?? 0; if (v > (best?.v ?? min)) best = { key: k, v };
+  }
   return best;
 }

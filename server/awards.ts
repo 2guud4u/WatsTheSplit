@@ -77,9 +77,9 @@ export function buildAwards(entities: Entity[], st: TripStats, fmtU: (v: number)
   if (accTop && accTop.v >= 2) awards.push({ emoji: "🤓", title: "The Accountant", members: [name(accTop.key)], detail: `typed ${accTop.v} exact shares — nobody trusts equal splits`, score: 10 + Math.min(accTop.v / (nExp * 2), 1) });
   const bigTop = top(st.biggestShare);
   if (bigTop && bigTop.v > 0) awards.push({ emoji: "🍾", title: "Champagne Tastes", members: [name(bigTop.key)], detail: `biggest single share: ${fmtU(bigTop.v)}`, score: 19 + bigTop.v / totalSpend });
-  const tiny = Object.fromEntries(Object.keys(st.consumed).filter((k) => st.consumed[k] > 0).map((k) => [k, st.consumed[k]]));
-  const pinKey = Object.keys(tiny).length ? Object.keys(tiny).reduce((a, b) => tiny[a] < tiny[b] ? a : b) : null;
-  if (pinKey) awards.push({ emoji: "🤏", title: "Penny Pincher", members: [name(pinKey)], detail: `only ${fmtU(tiny[pinKey])} of total damage`, score: 9 + (1 - tiny[pinKey] / totalSpend) });
+  const tiny = Object.fromEntries(Object.keys(st.consumed).filter((k) => (st.consumed[k] ?? 0) > 0).map((k) => [k, st.consumed[k]]));
+  const pinKey = Object.keys(tiny).length ? Object.keys(tiny).reduce((a, b) => (tiny[a] ?? 0) < (tiny[b] ?? 0) ? a : b) : null;
+  if (pinKey) awards.push({ emoji: "🤏", title: "Penny Pincher", members: [name(pinKey)], detail: `only ${fmtU(tiny[pinKey] ?? 0)} of total damage`, score: 9 + (1 - (tiny[pinKey] ?? 0) / totalSpend) });
   const ghosts = entities.filter((e) => !st.paid[e.key] && !st.consumed[e.key]);
   if (ghosts.length && (Object.keys(st.paid).length || Object.keys(st.consumed).length))
     awards.push({ emoji: "👻", title: "The Ghost", members: ghosts.map((g) => g.name), detail: "never paid, never on a receipt", score: 8 + Math.min(ghosts.length / entities.length, 1) });
@@ -99,7 +99,7 @@ export function buildAwards(entities: Entity[], st: TripStats, fmtU: (v: number)
     const rec: Record<string, number> = {};
     for (const [k, v] of Object.entries(st.catCombo)) {
       const [cat, ...ids] = k.split(">");
-      if (cats.includes(cat) && ids.length === size) add(rec, ids.join(">"), v);
+      if (cats.includes(cat ?? "") && ids.length === size) add(rec, ids.join(">"), v);
     }
     return top(rec);
   };
@@ -135,7 +135,7 @@ export function buildAwards(entities: Entity[], st: TripStats, fmtU: (v: number)
   const piggyTop = top(st.coverPair, 1);
   if (piggyTop && nEnt >= 2) {
     const [payer, sharer] = piggyTop.key.split(">");
-    awards.push({ emoji: "🫰", title: "Cover Piggybacker", members: [name(sharer), name(payer)], detail: `${name(payer)} covered them ${piggyTop.v} times`, score: 15 + Math.min(piggyTop.v / 5, 1) });
+    awards.push({ emoji: "🫰", title: "Cover Piggybacker", members: [name(sharer ?? ""), name(payer ?? "")], detail: `${name(payer ?? "")} covered them ${piggyTop.v} times`, score: 15 + Math.min(piggyTop.v / 5, 1) });
   }
   // tag team: pair with the most alternating cover (A fronted for B and B for A)
   const coverByPair: Record<string, number> = {};
@@ -171,8 +171,8 @@ export function buildAwards(entities: Entity[], st: TripStats, fmtU: (v: number)
   const deg: Record<string, Set<string>> = {};
   for (const k of Object.keys(st.pairShare)) {
     const [a, b] = k.split(">");
-    (deg[a] ??= new Set()).add(b);
-    (deg[b] ??= new Set()).add(a);
+    (deg[a ?? ""] ??= new Set()).add(b ?? "");
+    (deg[b ?? ""] ??= new Set()).add(a ?? "");
   }
   const pack = entities.filter((e) => (deg[e.key]?.size ?? 0) >= Math.min(3, nEnt - 1));
   if (pack.length === nEnt && nEnt >= 4)
@@ -211,7 +211,7 @@ export function buildAwards(entities: Entity[], st: TripStats, fmtU: (v: number)
     Souvenirs: "The Trinket Tribe", Fees: "The Fine Print Club", Nightlife: "The Last Call Crew",
     Wellness: "The Spa Society", Other: "The Miscellaneous Society",
   };
-  if (catTop) awards.push({ emoji: "🏆", title: catSquad[catTop.key] ?? `The ${catTop.key} Squad`, members: [], detail: `most spent on ${catTop.key}`, score: 22 + st.catTotal[catTop.key] / totalSpend });
+  if (catTop) awards.push({ emoji: "🏆", title: catSquad[catTop.key] ?? `The ${catTop.key} Squad`, members: [], detail: `most spent on ${catTop.key}`, score: 22 + (st.catTotal[catTop.key] ?? 0) / totalSpend });
   return awards;
 }
 
@@ -285,8 +285,8 @@ export function journeyBoard(jr: JourneyRows) {
   const partners: Record<string, Set<string>> = {};
   for (const k of Object.keys(st.pairShare)) {
     const [a, b] = k.split(">");
-    (partners[a] ??= new Set()).add(b);
-    (partners[b] ??= new Set()).add(a);
+    (partners[a ?? ""] ??= new Set()).add(b ?? "");
+    (partners[b ?? ""] ??= new Set()).add(a ?? "");
   }
   const glueTop = top(Object.fromEntries(Object.entries(partners).map(([k, s]) => [k, s.size])));
   if (glueTop && glueTop.v >= 2)

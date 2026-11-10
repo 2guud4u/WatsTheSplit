@@ -42,7 +42,7 @@ async function refreshFromFrankfurter(): Promise<boolean> {
     if (!Array.isArray(data) || data.length === 0) return false;
     const rates: Record<string, number> = { USD: 1 };
     for (const r of data) rates[r.quote] = r.rate;
-    storeRates(rates, data[0].date);
+    storeRates(rates, data[0]?.date ?? "");
     return true;
   } catch {
     return false;
@@ -120,7 +120,7 @@ export function crossRate(from: string, to: string): RateInfo | null {
   return {
     rate: t.usd_rate / f.usd_rate,
     provider: "openexchangerates",
-    providerTimestamp: minTs,
+    providerTimestamp: minTs ?? "",
   };
 }
 

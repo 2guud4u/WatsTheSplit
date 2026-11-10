@@ -31,8 +31,8 @@ export function seedDemo(): string | null {
     }
 
     // Bob peeked at the details modal a suspicious number of times.
-    db.run("UPDATE members SET detail_views = 6 WHERE id = ?", [members.Bob]);
-    db.run("UPDATE members SET detail_views = 2 WHERE id = ?", [members.Carol]);
+    db.run("UPDATE members SET detail_views = 6 WHERE id = ?", [members.Bob ?? ""]);
+    db.run("UPDATE members SET detail_views = 2 WHERE id = ?", [members.Carol ?? ""]);
 
     const addExpense = (o: {
       name: string; currency: string; totalMinor: number; payer?: string;
@@ -43,7 +43,7 @@ export function seedDemo(): string | null {
         `INSERT INTO expenses (id, trip_token, name, currency, total_minor, payer_member_id,
            category, rate, rate_provider, rate_timestamp, recorded_at, last_edited_by, last_edited_at, created_at)
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-        [id, DEMO_TOKEN, o.name, o.currency, o.totalMinor, o.payer ? members[o.payer] : null,
+        [id, DEMO_TOKEN, o.name, o.currency, o.totalMinor, o.payer ? members[o.payer] ?? "" : null,
           o.category ?? null, o.rate ?? null, o.rate ? "demo" : null,
           o.rate ? "2026-10-13T09:00:00Z" : null,
           o.when ?? now(), null, now(), now()],
@@ -52,17 +52,17 @@ export function seedDemo(): string | null {
     };
     const share = (exp: string, member: string, minor: number | null) =>
       db.run("INSERT INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,?)",
-        [exp, members[member], minor]);
+        [exp, members[member] ?? "", minor]);
     const addItem = (exp: string, name: string, priceMinor: number, sharers: string[]) => {
       const id = uid();
       db.run("INSERT INTO items (id, expense_id, name, price_minor) VALUES (?,?,?,?)",
         [id, exp, name, priceMinor]);
       for (const m of sharers) db.run(
-        "INSERT INTO item_sharers (item_id, member_id) VALUES (?,?)", [id, members[m]]);
+        "INSERT INTO item_sharers (item_id, member_id) VALUES (?,?)", [id, members[m] ?? ""]);
     };
     const settle = (from: string, to: string, minor: number) =>
       db.run("INSERT INTO settlements (id, trip_token, from_member, to_member, amount_minor, created_at, created_by) VALUES (?,?,?,?,?,?,?)",
-        [uid(), DEMO_TOKEN, members[from], members[to], minor, now(), from]);
+        [uid(), DEMO_TOKEN, members[from] ?? "", members[to] ?? "", minor, now(), from]);
 
     // 1) Itemized dinner: per-item sharers, fully assigned.
     const dinner = addExpense({
@@ -146,7 +146,7 @@ export function seedDemo(): string | null {
       [spa, "Dave"], [club, "Dave"],
     ];
     for (const [exp, m] of creators)
-      db.run("UPDATE expenses SET created_by_member_id = ? WHERE id = ?", [members[m], exp]);
+      db.run("UPDATE expenses SET created_by_member_id = ? WHERE id = ?", [members[m] ?? "", exp]);
 
     // Settlements.
     settle("Bob", "Alice", 2000);

@@ -184,8 +184,8 @@ export function tripBalances(rows: TripRows) {
     const epsilon = 0.5 / 10 ** dec;
     if (Math.abs(net) < epsilon) continue;
   pairs.push(net > 0
-    ? { from: a, to: b, amount: Math.round(net * 10 ** dec) / 10 ** dec }
-    : { from: b, to: a, amount: Math.round(-net * 10 ** dec) / 10 ** dec });
+    ? { from: a ?? "", to: b ?? "", amount: Math.round(net * 10 ** dec) / 10 ** dec }
+    : { from: b ?? "", to: a ?? "", amount: Math.round(-net * 10 ** dec) / 10 ** dec });
   }
   return { members, pairs, log };
 }

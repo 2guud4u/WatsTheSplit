@@ -18,7 +18,7 @@ const qMember = { get: (id: string) => stmt<Member, [string]>("SELECT * FROM mem
 export function ensureSession(req: Request): { session: Session; headers: HeadersInit } {
   const m = /(?:^|;\s*)wts_session=([^;]+)/.exec(req.headers.get("cookie") ?? "");
   if (m) {
-    const s = qSession.get(decodeURIComponent(m[1]));
+    const s = qSession.get(decodeURIComponent(m[1] ?? ""));
     if (s) return { session: s, headers: {} };
   }
   const token = crypto.randomUUID();
@@ -151,7 +151,7 @@ const err = (status: number, error: ErrorCode, extra: object = {}) => json({ err
 
 export function resolveTrip(s: Session, ref: EntityRef, tier: "view" | "edit"): TripAccess | Response {
   const kind = Object.keys(ref)[0] as EntityKind;
-  const token = entityTripToken[kind]((ref as Record<string, string>)[kind]);
+  const token = entityTripToken[kind]((ref as Record<string, string | undefined>)[kind] ?? "");
   const trip = token ? qTrip.get(token) : null;
   if (!trip) { const [st, code] = notFoundFor[kind]; return err(st, code); }
   if (tier === "edit" && !hasAccess(s, trip)) return err(401, "password_required", { protected: true });

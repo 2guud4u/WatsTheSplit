@@ -8,7 +8,7 @@ export function routes(ctx: RouteCtx): Route[] {
   const { json, err, now, qMember } = ctx;
   return [
     [/^\/api\/trips\/([A-Za-z0-9]+)\/settlements$/, "POST", async (_req, m, body, s) => {
-      const g = resolveTrip(s, { trip: m[1] }, "edit");
+      const g = resolveTrip(s, { trip: m[1] ?? "" }, "edit");
       if (g instanceof Response) return g;
       const { trip: t, me } = g;
       const from = qMember.get(String(body.from_member ?? ""));
@@ -27,14 +27,14 @@ export function routes(ctx: RouteCtx): Route[] {
       });
     }],
     [/^\/api\/settlements\/([A-Za-z0-9-]+)$/, "DELETE", async (_req, m, _body, s) => {
-      const o = resolveTrip(s, { settlement: m[1] }, "edit");
+      const o = resolveTrip(s, { settlement: m[1] ?? "" }, "edit");
       if (o instanceof Response) return o;
-      const st = db.query<{ id: string; from_member: string; to_member: string }, [string]>("SELECT id, from_member, to_member FROM settlements WHERE id = ?").get(m[1])!;
+      const st = db.query<{ id: string; from_member: string; to_member: string }, [string]>("SELECT id, from_member, to_member FROM settlements WHERE id = ?").get(m[1] ?? "")!;
       const from = qMember.get(st.from_member);
       const to = qMember.get(st.to_member);
       const sName = `${from?.name ?? "?"} paid ${to?.name ?? "?"}`;
       return mutateTrip(o.trip.token, () => {
-        db.run("DELETE FROM settlements WHERE id = ?", [m[1]]);
+        db.run("DELETE FROM settlements WHERE id = ?", [m[1] ?? ""]);
         logChange(o.trip.token, { type: "settlement", id: st.id, name: sName }, "deleted", null, null, null, o.me?.name ?? null);
         return json({ ok: true });
       });

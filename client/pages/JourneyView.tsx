@@ -225,7 +225,7 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
               return (
                 <div key={key} className="expense-row">
                   <span>
-                    {person?.name ?? ms[0].name}
+                    {person?.name ?? ms[0]?.name}
                     {merged && <span className="muted"> ({ms.map((m) => m.trip_name).join(" + ")})</span>}
                     {ms.some((m) => m.linked) && " ✓"}
                   </span>

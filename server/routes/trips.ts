@@ -52,7 +52,7 @@ export function routes(ctx: RouteCtx): Route[] {
     }],
 
     [/^\/api\/trips\/([A-Za-z0-9]+)$/, "GET", async (_req, m, _body, s) => {
-      const o = resolveTrip(s, { trip: m[1] }, "view");
+      const o = resolveTrip(s, { trip: m[1] ?? "" }, "view");
       if (o instanceof Response) return o;
       const t = o.trip;
       const me = o.me;
@@ -105,14 +105,14 @@ export function routes(ctx: RouteCtx): Route[] {
     }],
 
     [/^\/api\/trips\/([A-Za-z0-9]+)\/history$/, "GET", async (_req, m, _body, s) => {
-      const o = resolveTrip(s, { trip: m[1] }, "view");
+      const o = resolveTrip(s, { trip: m[1] ?? "" }, "view");
       if (o instanceof Response) return o;
       const rows = db.query<
         { id: string; entity_type: string; entity_id: string; entity_name: string; kind: string; field: string | null; old_value: string | null; new_value: string | null; by: string | null; created_at: string },
         [string]
       >(
         "SELECT * FROM expense_history WHERE trip_token = ? ORDER BY created_at DESC",
-      ).all(m[1]);
+      ).all(m[1] ?? "");
       // Legacy rows (pre-structured) hold plain text; treat those as text values.
       const parse = (s: string | null): HistoryValue | null => {
         if (s === null) return null;
@@ -134,7 +134,7 @@ export function routes(ctx: RouteCtx): Route[] {
     }],
 
     [/^\/api\/trips\/([A-Za-z0-9]+)\/password$/, "POST", async (_req, m, body, s) => {
-      const trip = qTrip.get(m[1]);
+      const trip = qTrip.get(m[1] ?? "");
       if (!trip) return err(404, "trip_not_found");
       let ok = false;
       try { ok = await Bun.password.verify(String(body.password ?? ""), trip.password_hash ?? "$invalid$"); }
@@ -145,7 +145,7 @@ export function routes(ctx: RouteCtx): Route[] {
     }],
 
     [/^\/api\/trips\/([A-Za-z0-9]+)\/settings$/, "PATCH", async (_req, m, body, s) => {
-      const g = resolveTrip(s, { trip: m[1] }, "edit");
+      const g = resolveTrip(s, { trip: m[1] ?? "" }, "edit");
       if (g instanceof Response) return g;
       const t = g.trip;
       // hash outside the transaction: db.transaction is synchronous
@@ -180,7 +180,7 @@ export function routes(ctx: RouteCtx): Route[] {
     }],
 
     [/^\/api\/trips\/([A-Za-z0-9]+)$/, "DELETE", async (_req, m, body, s) => {
-      const g = resolveTrip(s, { trip: m[1] }, "edit");
+      const g = resolveTrip(s, { trip: m[1] ?? "" }, "edit");
       if (g instanceof Response) return g;
       const t = g.trip;
       if (body.name !== t.name) return err(400, "name_mismatch");
@@ -192,7 +192,7 @@ export function routes(ctx: RouteCtx): Route[] {
 
     // counts how often the acting member opens an owe-card details modal
     [/^\/api\/trips\/([A-Za-z0-9]+)\/detail-view$/, "POST", async (_req, m, _body, s) => {
-      const o = resolveTrip(s, { trip: m[1] }, "edit");
+      const o = resolveTrip(s, { trip: m[1] ?? "" }, "edit");
       if (o instanceof Response) return o;
       if (o.me) return mutateTrip(o.trip.token, () => {
         db.run("UPDATE members SET detail_views = detail_views + 1 WHERE id = ?", [o.me!.id]);
@@ -204,7 +204,7 @@ export function routes(ctx: RouteCtx): Route[] {
     // SSE: live updates for the trip. Viewers get live updates too — they can
     // read the trip, so they can watch it.
     [/^\/api\/trips\/([A-Za-z0-9]+)\/events$/, "GET", async (_req, m, _body, s) => {
-      const o = resolveTrip(s, { trip: m[1] }, "view");
+      const o = resolveTrip(s, { trip: m[1] ?? "" }, "view");
       if (o instanceof Response) return o;
       const token = o.trip.token;
       let ctrl!: ReadableStreamDefaultController;

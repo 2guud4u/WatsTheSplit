@@ -36,7 +36,7 @@ export function CurrencyPicker({ value, options, onChange, placeholder = "— pi
           <input ref={inputRef} className="cur-search" placeholder="currency or country…"
             value={q} onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && filtered.length) { onChange(filtered[0]); setOpen(false); }
+              if (e.key === "Enter" && filtered.length) { onChange(filtered[0] ?? ""); setOpen(false); }
               if (e.key === "Escape") setOpen(false);
             }} />
           <div className="cur-list">

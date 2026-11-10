@@ -21,10 +21,10 @@ export function Awards({ title, awards, review, currency, onReplay }: {
       {awards && awards.length > 0 && (
         <>
           <div className="award-hero">
-            <div className="award-emoji">{awards[0].emoji}</div>
-            <div className="award-title">{awards[0].title}</div>
-            <div className="award-members">{awards[0].members.join(" + ")}</div>
-            <div className="muted">{awards[0].detail}</div>
+            <div className="award-emoji">{awards[0]?.emoji}</div>
+            <div className="award-title">{awards[0]?.title}</div>
+            <div className="award-members">{awards[0]?.members.join(" + ")}</div>
+            <div className="muted">{awards[0]?.detail}</div>
           </div>
           <div className="award-grid">
             {awards.slice(1).map((a) => (

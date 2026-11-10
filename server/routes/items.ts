@@ -8,7 +8,7 @@ export function routes(ctx: RouteCtx): Route[] {
   const { json, err, qMember, qExpense, qItem } = ctx;
   return [
     [/^\/api\/expenses\/([A-Za-z0-9-]+)\/items$/, "POST", async (_req, m, body, s) => {
-      const e = qExpense.get(m[1]);
+      const e = qExpense.get(m[1] ?? "");
       if (!e) return err(404, "expense_not_found");
       const g = resolveTrip(s, { expense: e.id }, "edit");
       if (g instanceof Response) return g;
@@ -35,9 +35,9 @@ export function routes(ctx: RouteCtx): Route[] {
       });
     }],
     [/^\/api\/items\/([A-Za-z0-9-]+)$/, "PATCH", async (_req, m, body, s) => {
-      const o = resolveTrip(s, { item: m[1] }, "edit");
+      const o = resolveTrip(s, { item: m[1] ?? "" }, "edit");
       if (o instanceof Response) return o;
-      const item = qItem.get(m[1])!;
+      const item = qItem.get(m[1] ?? "")!;
       const e = qExpense.get(item.expense_id)!;
       if (Array.isArray(body.sharers)) {
         for (const mid of body.sharers.map(String)) {
@@ -62,12 +62,12 @@ export function routes(ctx: RouteCtx): Route[] {
       });
     }],
     [/^\/api\/items\/([A-Za-z0-9-]+)$/, "DELETE", async (_req, m, _body, s) => {
-      const o = resolveTrip(s, { item: m[1] }, "edit");
+      const o = resolveTrip(s, { item: m[1] ?? "" }, "edit");
       if (o instanceof Response) return o;
-      const item = qItem.get(m[1])!;
+      const item = qItem.get(m[1] ?? "")!;
       const e = qExpense.get(item.expense_id)!;
       return mutateTrip(o.trip.token, () => {
-        db.run("DELETE FROM items WHERE id = ?", [m[1]]);
+        db.run("DELETE FROM items WHERE id = ?", [m[1] ?? ""]);
         const entity = { type: "expense" as const, id: e.id, name: e.name };
         logChange(o.trip.token, entity, "changed", "items", null, { kind: "text", text: `item ${item.name}` }, o.me?.name ?? null);
         return json({ ok: true });

@@ -11,7 +11,7 @@ export function routes(ctx: RouteCtx): Route[] {
   const { json, err, now, qMember, qExpense } = ctx;
   return [
     [/^\/api\/trips\/([A-Za-z0-9]+)\/expenses$/, "POST", async (_req, m, body, s) => {
-      const g = resolveTrip(s, { trip: m[1] }, "edit");
+      const g = resolveTrip(s, { trip: m[1] ?? "" }, "edit");
       if (g instanceof Response) return g;
       const { trip: t, me } = g;
       const name = String(body.name ?? "").trim();
@@ -46,7 +46,7 @@ export function routes(ctx: RouteCtx): Route[] {
       });
     }],
     [/^\/api\/expenses\/([A-Za-z0-9-]+)$/, "GET", async (_req, m, _body, s) => {
-      const e = qExpense.get(m[1]);
+      const e = qExpense.get(m[1] ?? "");
       if (!e) return err(404, "expense_not_found");
       const o = resolveTrip(s, { expense: e.id }, "view");
       if (o instanceof Response) return o;
@@ -63,7 +63,7 @@ export function routes(ctx: RouteCtx): Route[] {
       });
     }],
     [/^\/api\/expenses\/([A-Za-z0-9-]+)$/, "PATCH", async (_req, m, body, s) => {
-      const e = qExpense.get(m[1]);
+      const e = qExpense.get(m[1] ?? "");
       if (!e) return err(404, "expense_not_found");
       const g = resolveTrip(s, { expense: e.id }, "edit");
       if (g instanceof Response) return g;
@@ -137,9 +137,9 @@ export function routes(ctx: RouteCtx): Route[] {
       });
     }],
     [/^\/api\/expenses\/([A-Za-z0-9-]+)$/, "DELETE", async (_req, m, _body, s) => {
-      const o = resolveTrip(s, { expense: m[1] }, "edit");
+      const o = resolveTrip(s, { expense: m[1] ?? "" }, "edit");
       if (o instanceof Response) return o;
-      const e = qExpense.get(m[1])!;
+      const e = qExpense.get(m[1] ?? "")!;
       return mutateTrip(o.trip.token, () => {
         db.run("DELETE FROM expenses WHERE id = ?", [e.id]);
         logChange(o.trip.token, { type: "expense", id: e.id, name: e.name }, "deleted", null, null, null, o.me?.name ?? null);
@@ -148,7 +148,7 @@ export function routes(ctx: RouteCtx): Route[] {
     }],
     // Per-person paid toggle: the payer or the person themself.
     [/^\/api\/expenses\/([A-Za-z0-9-]+)\/paid$/, "PUT", async (_req, m, body, s) => {
-      const e = qExpense.get(m[1]);
+      const e = qExpense.get(m[1] ?? "");
       if (!e) return err(404, "expense_not_found");
       const g = resolveTrip(s, { expense: e.id }, "edit");
       if (g instanceof Response) return g;
@@ -171,7 +171,7 @@ export function routes(ctx: RouteCtx): Route[] {
       });
     }],
     [/^\/api\/expenses\/([A-Za-z0-9-]+)\/participants$/, "PUT", async (_req, m, body, s) => {
-      const e = qExpense.get(m[1]);
+      const e = qExpense.get(m[1] ?? "");
       if (!e) return err(404, "expense_not_found");
       const g = resolveTrip(s, { expense: e.id }, "edit");
       if (g instanceof Response) return g;
@@ -198,7 +198,7 @@ export function routes(ctx: RouteCtx): Route[] {
       });
     }],
     [/^\/api\/expenses\/([A-Za-z0-9-]+)\/shares$/, "PUT", async (_req, m, body, s) => {
-      const e = qExpense.get(m[1]);
+      const e = qExpense.get(m[1] ?? "");
       if (!e) return err(404, "expense_not_found");
       const g = resolveTrip(s, { expense: e.id }, "edit");
       if (g instanceof Response) return g;
@@ -225,7 +225,7 @@ export function routes(ctx: RouteCtx): Route[] {
       });
     }],
     [/^\/api\/expenses\/([A-Za-z0-9-]+)\/split$/, "POST", async (_req, m, body, s) => {
-      const e = qExpense.get(m[1]);
+      const e = qExpense.get(m[1] ?? "");
       if (!e) return err(404, "expense_not_found");
       const g = resolveTrip(s, { expense: e.id }, "edit");
       if (g instanceof Response) return g;
@@ -265,14 +265,13 @@ export function routes(ctx: RouteCtx): Route[] {
             `INSERT INTO expense_participants (expense_id, member_id, share_minor) VALUES (?,?,0)
              ON CONFLICT(expense_id, member_id) DO UPDATE SET share_minor = expense_participants.share_minor + ?`,
           );
-          for (let i = 0; i < withShare.length; i++) {
-            const p = withShare[i];
+          withShare.forEach((p, i) => {
             const add = i === withShare.length - 1
               ? rest - allocated
-              : Math.floor((p.minor! / total) * rest);
+              : Math.floor((p.minor ?? 0) / total * rest);
             allocated += add;
             upd.run(e.id, p.member_id, add);
-          }
+          });
         } else return err(400, "bad_split_type");
         const entity = { type: "expense" as const, id: e.id, name: e.name };
         logChange(t.token, entity, "changed", "split", null, { kind: "split", type }, me?.name ?? null);

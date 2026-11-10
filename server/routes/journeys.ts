@@ -47,7 +47,7 @@ export function routes(ctx: RouteCtx): Route[] {
       const picked = [...new Set(wanted)].map((t) => allowed.get(t)).filter((t): t is Trip => !!t);
       if (!picked.length) return err(400, "no_trips");
       // A Journey has no currency of its own: every trip must settle in the same one.
-      const sc = picked[0].settle_currency;
+      const sc = picked[0]?.settle_currency ?? "";
       if (picked.some((t) => t.settle_currency !== sc)) return err(400, "settle_currency_mismatch");
       const tokens = picked.map((t) => t.token);
       const token = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
@@ -60,7 +60,7 @@ export function routes(ctx: RouteCtx): Route[] {
       });
     }],
     [/^\/api\/journeys\/([A-Za-z0-9]+)$/, "GET", async (_req, m, _body, s) => {
-      const gj = resolveJourney(s, m[1]);
+      const gj = resolveJourney(s, m[1] ?? "");
       if (gj instanceof Response) return gj;
       const j = gj.j;
       const jr = loadJourneyRows(j);
@@ -77,7 +77,7 @@ export function routes(ctx: RouteCtx): Route[] {
       for (const [, ms] of byName) {
         const keys = new Set(ms.map((mm) => keyOf(mm)));
         if (keys.size > 1)
-          hints.push({ name: ms[0].name, member_ids: ms.map((mm) => mm.id), trips: [...new Set(ms.map((mm) => mm.trip_name!))] });
+          hints.push({ name: ms[0]?.name ?? "", member_ids: ms.map((mm) => mm.id), trips: [...new Set(ms.map((mm) => mm.trip_name!))] });
       }
       const { transfers } = journeyBalance(jr);
       // Trip Wrapped waits for trip end (or 5 days after creation with no end
@@ -132,14 +132,14 @@ export function routes(ctx: RouteCtx): Route[] {
     }],
     // journey link: opening it (POST join) grants read access to every member trip
     [/^\/api\/journeys\/([A-Za-z0-9]+)\/join$/, "POST", async (_req, m, _body, s) => {
-      const j = qJourney.get(m[1]);
+      const j = qJourney.get(m[1] ?? "");
       if (!j) return err(404, "journey_not_found");
       grantJourneyAccess(s, j);
       notify.journey(j.token);
       return json({ ok: true });
     }],
     [/^\/api\/journeys\/([A-Za-z0-9]+)\/trips$/, "POST", async (_req, m, body, s) => {
-      const g = resolveJourney(s, m[1]);
+      const g = resolveJourney(s, m[1] ?? "");
       if (g instanceof Response) return g;
       const { j } = g;
       const tt = String(body.trip_token ?? "");
@@ -155,19 +155,19 @@ export function routes(ctx: RouteCtx): Route[] {
       });
     }],
     [/^\/api\/journeys\/([A-Za-z0-9]+)\/trips\/([A-Za-z0-9]+)$/, "DELETE", async (_req, m, _body, s) => {
-      const g = resolveJourney(s, m[1]);
+      const g = resolveJourney(s, m[1] ?? "");
       if (g instanceof Response) return g;
       const { j } = g;
       const r = mutateJourney(j.token, () => {
-        db.run("DELETE FROM journey_trips WHERE journey_token = ? AND trip_token = ?", [j.token, m[2]]);
-        db.run("DELETE FROM journey_merges WHERE journey_token = ? AND member_id IN (SELECT id FROM members WHERE trip_token = ?)", [j.token, m[2]]);
+        db.run("DELETE FROM journey_trips WHERE journey_token = ? AND trip_token = ?", [j.token, m[2] ?? ""]);
+        db.run("DELETE FROM journey_merges WHERE journey_token = ? AND member_id IN (SELECT id FROM members WHERE trip_token = ?)", [j.token, m[2] ?? ""]);
         return json({ ok: true });
       });
-      if (!(r instanceof Response) || r.status < 400) notify.trip(m[2]);
+      if (!(r instanceof Response) || r.status < 400) notify.trip(m[2] ?? "");
       return r;
     }],
     [/^\/api\/journeys\/([A-Za-z0-9]+)\/merge$/, "POST", async (_req, m, body, s) => {
-      const g = resolveJourney(s, m[1]);
+      const g = resolveJourney(s, m[1] ?? "");
       if (g instanceof Response) return g;
       const { j } = g;
       const ids = (Array.isArray(body.member_ids) ? body.member_ids : []).map(String);
@@ -190,7 +190,7 @@ export function routes(ctx: RouteCtx): Route[] {
     // journey settings: rename + Journey Wrapped toggle. Dissolving a journey
     // only removes the grouping — its trips are untouched.
     [/^\/api\/journeys\/([A-Za-z0-9]+)\/settings$/, "PATCH", async (_req, m, body, s) => {
-      const g = resolveJourney(s, m[1]);
+      const g = resolveJourney(s, m[1] ?? "");
       if (g instanceof Response) return g;
       const { j } = g;
       const name = body.name !== undefined ? String(body.name ?? "").trim() : null;
@@ -211,7 +211,7 @@ export function routes(ctx: RouteCtx): Route[] {
       });
     }],
     [/^\/api\/journeys\/([A-Za-z0-9]+)$/, "DELETE", async (_req, m, body, s) => {
-      const g = resolveJourney(s, m[1]);
+      const g = resolveJourney(s, m[1] ?? "");
       if (g instanceof Response) return g;
       const { j } = g;
       if (String(body.name ?? "") !== j.name) return err(400, "name_mismatch");
@@ -229,11 +229,11 @@ export function routes(ctx: RouteCtx): Route[] {
       return r;
     }],
     [/^\/api\/journeys\/([A-Za-z0-9]+)\/merge\/([A-Za-z0-9-]+)$/, "DELETE", async (_req, m, _body, s) => {
-      const g = resolveJourney(s, m[1]);
+      const g = resolveJourney(s, m[1] ?? "");
       if (g instanceof Response) return g;
       const { j } = g;
       return mutateJourney(j.token, () => {
-        db.run("DELETE FROM journey_merges WHERE journey_token = ? AND member_id = ?", [j.token, m[2]]);
+        db.run("DELETE FROM journey_merges WHERE journey_token = ? AND member_id = ?", [j.token, m[2] ?? ""]);
         return json({ ok: true });
       });
     }],
