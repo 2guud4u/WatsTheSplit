@@ -49,11 +49,18 @@ function newCode(): string {
 export type SendResult = "ok" | "rate_limited" | "send_failed";
 export type CheckResult = "ok" | "no_code" | "code_expired" | "too_many_attempts" | "wrong_code";
 
+export type Auth = {
+  /** Issue a code: 3 sends per email per hour, then email it. Nothing stored on send failure. */
+  sendCode: (email: string) => Promise<SendResult>;
+  /** Check a code: single-use, 5 attempts, 10-minute TTL. Deletes the row on success. */
+  checkCode: (email: string, code: string) => Promise<CheckResult>;
+};
+
 export function createAuth({ mailer, baseUrl, sendLog = new Map<string, number[]>() }: {
   mailer: Mailer;
   baseUrl: string;
   sendLog?: Map<string, number[]>;
-}) {
+}): Auth {
   return {
     /** Issue a code: 3 sends per email per hour, then email it. Nothing stored on send failure. */
     async sendCode(email: string): Promise<SendResult> {
