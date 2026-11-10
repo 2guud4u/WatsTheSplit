@@ -1,6 +1,5 @@
 import { db, stmt } from "./db.ts";
 import type { ErrorCode } from "../shared/wire.ts";
-import { CURRENCIES } from "./currencies.ts";
 import { createAuth, type Mailer } from "./auth.ts";
 import {
   ensureSession, linkedMember, myMember, hasAccess, accessibleTrips,

@@ -20,6 +20,9 @@ import { useTabMemory } from "../hooks/useTabMemory.ts";
 import { useTripHistory } from "../hooks/useTripHistory.ts";
 import { historyValueLabel, historyEntrySentence } from "../utils/format.ts";
 import { PaymentForm, PaymentPromptModal, paymentPromptSeen, markPaymentPromptSeen, paymentHasInfo } from "../components/PaymentForm.tsx";
+import { ClaimCard } from "../components/ClaimCard.tsx";
+import { SettleCard } from "../components/SettleCard.tsx";
+import { Settings } from "../components/Settings.tsx";
 
 // One owe-card with its own details modal. Defined at module level (NOT inside
 // TripView's render) so React keeps the same component instance across
@@ -71,56 +74,6 @@ function Owe({ p, dir, data, readOnly, markPaid, onDetail }: {
   );
 }
 
-// "Who are you?" claim / switch card. Defined at module level (NOT inside
-// TripView's render) so React keeps the same component instance across
-// re-renders: the name field is typed by an invitee, and an inline component
-// would be rebuilt on every keystroke (setNewName → re-render), remounting
-// the <input> and dropping its focus — the keyboard goes away on mobile
-// after each character. The `newName` draft lives in this component.
-function ClaimCard({ data, readOnly, requestSwitch, load, reloadMe,
-  switching = false, onCancel }: {
-  data: TripData; readOnly: boolean;
-  requestSwitch: (input: ClaimInput, label: string) => void;
-  load: () => Promise<void>; reloadMe: () => void;
-  switching?: boolean; onCancel?: () => void;
-}) {
-  const [newName, setNewName] = useState("");
-  return (
-    <div className="card">
-      <h2 style={{ marginTop: 0 }}>{switching ? "Switch who you are" : "Who are you?"}</h2>
-      <p className="muted">
-        {switching ? "Pick your name — you'll act as them in this trip." :
-          <>Pick your name or add a new one{readOnly ? " — or just browse below" : ""}.</>}{" "}
-        {!data.signed_in && <>Without signing in, <b>anyone with the trip link can pick your name later</b>.</>}
-      </p>
-      <div className="row" style={{ marginBottom: 10 }}>
-        {data.members.map((m) => m.is_me ? (
-          <SelfChip key={m.id} name={m.name} linked={m.linked} crown={m.id === data.creator_id} />
-        ) : (
-          <PickChip key={m.id} name={m.name} linked={m.linked}
-            crown={m.id === data.creator_id}
-            disabled={m.linked}
-            onClick={() => requestSwitch({ member_id: m.id }, m.name)} />
-        ))}
-      </div>
-      <div className="row">
-        <input className="wide" value={newName} placeholder="Your name"
-          onChange={(e) => setNewName(e.target.value)} />
-        <button className="primary" disabled={!newName.trim()} onClick={async () => {
-          requestSwitch({ name: newName.trim() }, newName.trim());
-          setNewName("");
-        }}>Join as new</button>
-      </div>
-      {!data.signed_in && (
-        <div style={{ marginTop: 14 }}>
-          <SignInButton label="Sign in to lock your name" onSignedIn={() => { reloadMe(); load(); }} />
-        </div>
-      )}
-      {onCancel && <button className="link" style={{ marginTop: 8 }} onClick={onCancel}>cancel</button>}
-    </div>
-  );
-}
-
 export default function TripView({ token, config, reloadMe }: {
   token: string; config: Config | null;
   reloadMe: () => void;
@@ -145,7 +98,6 @@ export default function TripView({ token, config, reloadMe }: {
   // already saved; the prompt only sets its category. Skip (button or backdrop)
   // leaves it uncategorized.
   const [categoryPrompt, setCategoryPrompt] = useState<string | null>(null);
-  const [settleFrom, settleTo] = [settle.from, settle.to];
 
   // Trip Wrapped unlocks at trip end — or 5 days after creation when no end date is set.
   const wrappedAt = data ? (data.trip.end_date ? `${data.trip.end_date}T23:59:59` : new Date(new Date(data.trip.created_at).getTime() + 5 * 86400e3).toISOString()) : "";
@@ -433,30 +385,13 @@ export default function TripView({ token, config, reloadMe }: {
           )}
 
           {tab === "youowe" && !readOnly && (
-          <details className="more">
-            <summary>Record a custom payment</summary>
-            <div className="row">
-              <select value={settleFrom} onChange={(e) => setSettle({ ...settle, from: e.target.value })}>
-                <option value="">From…</option>
-                {data.members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-              </select>
-              <select value={settleTo} onChange={(e) => setSettle({ ...settle, to: e.target.value })}>
-                <option value="">To…</option>
-                {data.members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-              </select>
-              <input className="money" value={settle.amount} placeholder="0.00" inputMode="decimal"
-                onChange={(e) => setSettle({ ...settle, amount: e.target.value })} />
-              <span className="muted">{t.settle_currency}</span>
-              <button className="primary" disabled={!settleFrom || !settleTo || settleFrom === settleTo || !settle.amount}
-                onClick={async () => {
-                  await actions.settle({
-                    from_member: settleFrom, to_member: settleTo,
-                    amount_minor: toMinor(settle.amount, t.settle_currency),
-                  });
-                  setSettle({ from: "", to: "", amount: "" });
-                }}>Record</button>
-            </div>
-          </details>
+          <SettleCard data={data} settle={settle} setSettle={setSettle}
+            record={async (p) => {
+              await actions.settle({
+                from_member: p.from, to_member: p.to,
+                amount_minor: toMinor(p.amount, t.settle_currency),
+              });
+            }} />
           )}
         </div>
         );
@@ -546,145 +481,5 @@ export default function TripView({ token, config, reloadMe }: {
       </>
       )}
     </>
-  );
-}
-
-
-
-function Settings({ data, token, currencies, actions, onSwitch, setShow, reloadMe }: {
-  data: TripData; token: string; currencies: string[];
-  actions: { patchSettings: (p: TripSettingsPatch) => Promise<void>; addMember: (n: string) => Promise<void>; removeMember: (id: string) => Promise<void>; deleteTrip: (n: string) => Promise<void>; savePayment: (p: { phone: string | null; venmo: string | null; cash_app: string | null }) => Promise<void> };
-  onSwitch: (id: string, name: string) => void;
-  setShow: (b: boolean) => void;
-  reloadMe: () => void;
-}) {
-  const t = data.trip;
-  const [pw, setPw] = useState("");
-  const [funErr, setFunErr] = useState("");
-  const [newMember, setNewMember] = useState("");
-  const [delName, setDelName] = useState("");
-
-  return (
-    <div className="card">
-      <h2 style={{ marginTop: 0 }}>Settings</h2>
-      <div className="field">
-        <label className="field-label">Name</label>
-        <input className="wide" defaultValue={t.name} onBlur={async (e) => {
-          if (e.target.value !== t.name) { await actions.patchSettings({ name: e.target.value }); }
-        }} />
-      </div>
-      <div className="field"><label className="field-label">Dates</label>
-        <SettingsDates t={t} actions={actions} />
-      </div>
-      <div className="row">
-        <div className="field"><label className="field-label">Trip currency</label>
-          <div className="locked-field">{flag(t.trip_currency)} {t.trip_currency}</div></div>
-        <div className="field"><label className="field-label">Settlement currency</label>
-          <div className="locked-field">{flag(t.settle_currency)} {t.settle_currency}</div></div>
-      </div>
-      <p className="muted" style={{ marginTop: -6 }}>Currencies locked at creation</p>
-
-      <div className="field">
-        <label className="field-label">🎁 Trip Wrapped</label>
-        {data.is_creator ? (
-          <>
-            <label className="member-chip" style={{ cursor: "pointer" }}>
-              <input type="checkbox" checked={t.fun_leaderboard} onChange={async (e) => {
-                setFunErr("");
-                try { await actions.patchSettings({ fun_leaderboard: e.target.checked }); }
-                catch (err) { setFunErr(describeError(err)); }
-              }} />
-              Show the Trip Wrapped tab with silly awards
-            </label>
-            {funErr && <p className="error" style={{ margin: "6px 0 0" }}>{funErr}</p>}
-          </>
-        ) : (
-          <p className="muted">Only the trip creator can toggle this.</p>
-        )}
-      </div>
-
-      <div className="field">
-        <label className="field-label">Trip password</label>
-        <div className="row">
-          <input type="password" value={pw} placeholder="New trip password"
-            onChange={(e) => setPw(e.target.value)} />
-          <button disabled={!pw} onClick={async () => {
-            await actions.patchSettings({ password: pw });
-            setPw("");
-          }}>Change</button>
-        </div>
-        <p className="muted">Every trip keeps a password. Changing it re-prompts every device except signed-in members.</p>
-      </div>
-
-      <div className="field">
-        <label className="field-label">Members</label>
-        {data.members.map((m) => (
-          <div key={m.id} className="expense-row">
-            <span>{m.name} {m.linked && <span className="pill">🔒 linked</span>} {m.is_me && <span className="pill">(you)</span>}</span>
-            <span>
-              {!m.is_me && !m.linked && (
-                <button className="link" onClick={() => onSwitch(m.id, m.name)}>this is me</button>
-              )}
-              {!m.used && !m.is_me && (
-                <button className="link danger" onClick={async () => {
-                  await actions.removeMember(m.id);
-                }}>remove</button>
-              )}
-            </span>
-          </div>
-        ))}
-        <div className="row">
-          <input className="wide" value={newMember} placeholder="Add a placeholder member"
-            onChange={(e) => setNewMember(e.target.value)} />
-          <button disabled={!newMember.trim()} onClick={async () => {
-            await actions.addMember(newMember.trim());
-            setNewMember("");
-          }}>Add</button>
-        </div>
-      </div>
-
-      <div className="field">
-        <label className="field-label">How to pay you</label>
-        {data.me ? (
-          <PaymentForm
-            initial={data.me.payment}
-            onSaved={() => reloadMe()}
-            onSave={(p) => actions.savePayment(p)} />
-        ) : (
-          <p className="muted">Pick your name first, then add how to pay you.</p>
-        )}
-      </div>
-
-      <div className="field">
-        <label className="field-label error">Danger zone</label>
-        <div className="row">
-          <input value={delName} placeholder={`Type "${t.name}" to delete`}
-            onChange={(e) => setDelName(e.target.value)} />
-          <button className="danger" disabled={delName !== t.name} onClick={async () => {
-            await actions.deleteTrip(delName);
-            location.hash = "#/";
-          }}>Delete trip</button>
-        </div>
-      </div>
-      <button onClick={() => setShow(false)}>Close</button>
-    </div>
-  );
-}
-function SettingsDates({ t, actions }: { t: { start_date: string | null; end_date: string | null }; actions: { patchSettings: (p: TripSettingsPatch) => Promise<void> } }) {
-  const parse = (s: string | null) => (s ? new Date(s + "T00:00:00") : undefined);
-  const [range, setRange] = useState<DateRange | undefined>({ from: parse(t.start_date), to: parse(t.end_date) });
-  const save = async (r: DateRange | undefined) => {
-    await actions.patchSettings({
-      start_date: r?.from ? r.from.toISOString().slice(0, 10) : null,
-      end_date: r?.to ? r.to.toISOString().slice(0, 10) : null,
-    });
-  };
-  return (
-    <div>
-      <RangePicker value={range} onChange={setRange} onCommit={save} />
-      {(range?.from || range?.to) && (
-        <button className="link" onClick={async () => { setRange(undefined); await save(undefined); }}>Clear dates</button>
-      )}
-    </div>
   );
 }
