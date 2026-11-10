@@ -43,7 +43,7 @@ function App() {
       <SnackRoot />
       {mExp ? <ExpenseView key={mExp[2]} token={mExp[1]} expenseId={mExp[2]} />
         : mJourney ? <JourneyView key={mJourney[1]} token={mJourney[1]} reloadMe={reloadMe} />
-        : mTrip ? <TripView key={mTrip[1]} token={mTrip[1]} config={config} me={me} reloadMe={reloadMe} />
+        : mTrip ? <TripView key={mTrip[1]} token={mTrip[1]} config={config} reloadMe={reloadMe} />
         : <Home config={config} me={me} reloadMe={reloadMe} />}
     </>
   );

@@ -236,6 +236,12 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
         const mine = new Set(data.members.filter((m) => data.my_member_ids.includes(m.id)).map((m) => m.key));
         const rows = data.transfers.filter((tr) =>
           mine.size === 0 ? tab === "owed" : tab === "owed" ? mine.has(tr.to_key) : mine.has(tr.from_key));
+        // The payee's Payment Method: a person's member (across its trips)
+        // with the linked account's payment.
+        const paymentFor = (key: string) => {
+          const m = data.members.find((mm) => mm.key === key && mm.payment);
+          return m?.payment ?? null;
+        };
         return (
           <div className="card">
             {mine.size === 0 && <p className="muted">You haven't joined a trip yet — showing everything.</p>}
@@ -250,7 +256,8 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
                     amount={tr.amount} currency={cur}
                     dir={tab === "owed" ? "in" : "out"}
                     onConfirm={mine.size > 0 ? () => setPaying(tr) : undefined}
-                    onDetails={tr.parts.some((p) => p.log.length > 0) ? () => setDetail(tr) : undefined} />
+                    onDetails={tr.parts.some((p) => p.log.length > 0) ? () => setDetail(tr) : undefined}
+                    payment={paymentFor(tab === "owed" ? tr.from_key : tr.to_key)} />
                 ))}
               </div>
             )}

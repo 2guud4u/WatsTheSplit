@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { BASE, Config, Me, describeError } from "../services/api.ts";
+import React, { useState, useEffect } from "react";
+import { BASE, Config, describeError } from "../services/api.ts";
 import type { TripView as TripData, TripSettingsPatch, ClaimInput } from "../services/api.ts";
 import { toMinor, fmt, fmtUnits, decimals, flag, CATEGORIES } from "../utils/format.ts";
 import { showSnack } from "../components/Snack.tsx";
@@ -19,6 +19,7 @@ import { useTrip } from "../hooks/useTrip.ts";
 import { useTabMemory } from "../hooks/useTabMemory.ts";
 import { useTripHistory } from "../hooks/useTripHistory.ts";
 import { historyValueLabel, historyEntrySentence } from "../utils/format.ts";
+import { PaymentForm, PaymentPromptModal, paymentPromptSeen, markPaymentPromptSeen, paymentHasInfo } from "../components/PaymentForm.tsx";
 
 // One owe-card with its own details modal. Defined at module level (NOT inside
 // TripView's render) so React keeps the same component instance across
@@ -48,7 +49,8 @@ function Owe({ p, dir, data, readOnly, markPaid, onDetail }: {
         onDetails={entries.length ? () => {
           setMathOpen(true);
           onDetail();
-        } : undefined} />
+        } : undefined}
+        payment={m?.payment} />
       {mathOpen && (
         <OweDetailsModal
           title={`${m?.name ?? "?"} · ${fmtUnits(p.amount, data.trip.settle_currency)}`}
@@ -119,8 +121,8 @@ function ClaimCard({ data, readOnly, requestSwitch, load, reloadMe,
   );
 }
 
-export default function TripView({ token, config, me: meInfo, reloadMe }: {
-  token: string; config: Config | null; me: Me;
+export default function TripView({ token, config, reloadMe }: {
+  token: string; config: Config | null;
   reloadMe: () => void;
 }) {
   const vm = useTrip(token);
@@ -150,6 +152,18 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
   const wrappedLive = data ? (data.trip.fun_leaderboard && Date.now() >= Date.parse(wrappedAt)) : false;
   const { tab, setTab } = useTabMemory<"expenses" | "owed" | "youowe" | "fun" | "history">(token, ["expenses", "owed", "youowe", "fun", "history"], "owed", wrappedLive);
   const { history } = useTripHistory(token);
+
+  // "How to pay you?" prompt: once per user (global flag), for anyone who
+  // joined (have a claim) or the trip has ended, when their Payment Method
+  // is empty. No sign-in gate — friction-free. Must run before the early
+  // returns so hook order stays stable.
+  const [showPaymentPrompt, setShowPaymentPrompt] = useState(false);
+  useEffect(() => {
+    if (!data || !data.me) return;
+    if (paymentHasInfo(data.me.payment)) return;
+    if (paymentPromptSeen()) return;
+    setShowPaymentPrompt(true);
+  }, [data]);
 
   if (needsPassword) {
     return (
@@ -295,8 +309,16 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
       {showInvite && <ShareLink url={inviteUrl} note="Anyone with this link can join — keep it private." />}
 
       {showSettings && <Settings data={data} token={token} currencies={currencies} actions={actions}
-        onSwitch={(id, name) => requestSwitch({ member_id: id }, name)} setShow={setShowSettings} />}
+        onSwitch={(id, name) => requestSwitch({ member_id: id }, name)} setShow={setShowSettings}
+        reloadMe={reloadMe} />}
       {switchModal}
+      {showPaymentPrompt && data.me && (
+        <PaymentPromptModal
+          initial={data.me.payment}
+          onClose={() => { setShowPaymentPrompt(false); markPaymentPromptSeen(); }}
+          onSaved={() => { setShowPaymentPrompt(false); markPaymentPromptSeen(); reloadMe(); }}
+          onSave={(p) => actions.savePayment(p)} />
+      )}
       {categoryPrompt && (
         <div className="modal-bg" onClick={() => { setCategoryPrompt(null); location.hash = `#/t/${token}/e/${categoryPrompt}`; }}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -529,11 +551,12 @@ export default function TripView({ token, config, me: meInfo, reloadMe }: {
 
 
 
-function Settings({ data, token, currencies, actions, onSwitch, setShow }: {
+function Settings({ data, token, currencies, actions, onSwitch, setShow, reloadMe }: {
   data: TripData; token: string; currencies: string[];
-  actions: { patchSettings: (p: TripSettingsPatch) => Promise<void>; addMember: (n: string) => Promise<void>; removeMember: (id: string) => Promise<void>; deleteTrip: (n: string) => Promise<void> };
+  actions: { patchSettings: (p: TripSettingsPatch) => Promise<void>; addMember: (n: string) => Promise<void>; removeMember: (id: string) => Promise<void>; deleteTrip: (n: string) => Promise<void>; savePayment: (p: { phone: string | null; venmo: string | null; cash_app: string | null }) => Promise<void> };
   onSwitch: (id: string, name: string) => void;
   setShow: (b: boolean) => void;
+  reloadMe: () => void;
 }) {
   const t = data.trip;
   const [pw, setPw] = useState("");
@@ -618,6 +641,18 @@ function Settings({ data, token, currencies, actions, onSwitch, setShow }: {
             setNewMember("");
           }}>Add</button>
         </div>
+      </div>
+
+      <div className="field">
+        <label className="field-label">How to pay you</label>
+        {data.me ? (
+          <PaymentForm
+            initial={data.me.payment}
+            onSaved={() => reloadMe()}
+            onSave={(p) => actions.savePayment(p)} />
+        ) : (
+          <p className="muted">Pick your name first, then add how to pay you.</p>
+        )}
       </div>
 
       <div className="field">

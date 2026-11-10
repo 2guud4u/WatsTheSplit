@@ -48,6 +48,25 @@ const qPhoto = { get: (id: string) => stmt<{ id: string; expense_id: string; mim
 const qSettlement = { get: (id: string) => stmt<{ id: string; trip_token: string }, [string]>("SELECT id, trip_token FROM settlements WHERE id = ?").get(id) };
 
 
+// A linked member's Payment Method is their account's (shared across all trips).
+const paymentOf = (email: string): { phone: string | null; venmo: string | null; cash_app: string | null } => {
+  const u = stmt<{ phone: string | null; venmo: string | null; cash_app: string | null }, [string]>(
+    "SELECT phone, venmo, cash_app FROM users WHERE email = ?").get(email);
+  return { phone: u?.phone ?? null, venmo: u?.venmo ?? null, cash_app: u?.cash_app ?? null };
+};
+
+// An unlinked member's Payment Method is stored on their own row (per trip).
+// null if the member has no payment info (so the card shows nothing).
+const memberPayment = (m: Member): { phone: string | null; venmo: string | null; cash_app: string | null } | null => {
+  const phone = m.phone ?? null, venmo = m.venmo ?? null, cash_app = m.cash_app ?? null;
+  if (!phone && !venmo && !cash_app) return null;
+  return { phone, venmo, cash_app };
+};
+
+// A member's Payment Method: linked → account's (shared); unlinked → their row's.
+const paymentOfMember = (m: Member): { phone: string | null; venmo: string | null; cash_app: string | null } | null =>
+  m.user_sub ? paymentOf(m.user_sub) : memberPayment(m);
+
 const memberIsUsed = (tripToken: string, memberId: string): boolean => {
   const checks: [string, string[]][] = [
     ["SELECT COUNT(*) n FROM expenses WHERE trip_token = ? AND payer_member_id = ?", [tripToken, memberId]],
@@ -79,9 +98,34 @@ const routes: Route[] = [
 
   [/^\/api\/me$/, "GET", async (_req, _m, _body, s) => {
     const user = s.user_sub
-      ? db.query("SELECT email, name FROM users WHERE email = ?").get(s.user_sub)
+      ? stmt<{ email: string; name: string | null; phone: string | null; venmo: string | null; cash_app: string | null }, [string]>(
+          "SELECT email, name, phone, venmo, cash_app FROM users WHERE email = ?").get(s.user_sub)
       : null;
-    return json({ user });
+    return json({ user: user ? {
+      email: user.email, name: user.name,
+      payment: { phone: user.phone, venmo: user.venmo, cash_app: user.cash_app },
+    } : null });
+  }],
+
+  [/^\/api\/me$/, "PUT", async (_req, _m, body, s) => {
+    if (!s.user_sub) return err(401, "not_signed_in");
+    // undefined = don't change; null = clear (set NULL); string = set (trim).
+    const p = body.payment as { phone?: unknown; venmo?: unknown; cash_app?: unknown } | undefined;
+    if (p) {
+      const pairs: string[] = [], vals: (string | null)[] = [];
+      for (const [col, v] of [["phone", p.phone], ["venmo", p.venmo], ["cash_app", p.cash_app]] as const) {
+        if (v === undefined) continue;
+        const val = v === null ? null : String(v).trim() || null;
+        pairs.push(`${col} = ?`); vals.push(val);
+      }
+      if (pairs.length) db.run(`UPDATE users SET ${pairs.join(", ")} WHERE email = ?`, [...vals, s.user_sub]);
+    }
+    const user = stmt<{ email: string; name: string | null; phone: string | null; venmo: string | null; cash_app: string | null }, [string]>(
+      "SELECT email, name, phone, venmo, cash_app FROM users WHERE email = ?").get(s.user_sub)!;
+    return json({ user: {
+      email: user.email, name: user.name,
+      payment: { phone: user.phone, venmo: user.venmo, cash_app: user.cash_app },
+    } });
   }],
 
   [/^\/api\/auth\/email$/, "POST", async (_req, _m, body) => {
@@ -113,6 +157,27 @@ const routes: Route[] = [
            AND trip_token NOT IN (SELECT trip_token FROM members WHERE user_sub = ?)`,
         [email, s.token, email],
       );
+      // Promote: this device's member rows' payment (set while unlinked) now
+      // becomes the account's payment, filling only empty fields.
+      const m = stmt<{ phone: string | null; venmo: string | null; cash_app: string | null }, [string]>(
+        `SELECT m.phone, m.venmo, m.cash_app FROM members m
+         JOIN claims c ON c.member_id = m.id
+         WHERE c.session_token = ?
+           AND (m.phone IS NOT NULL OR m.venmo IS NOT NULL OR m.cash_app IS NOT NULL)
+         ORDER BY (m.phone IS NOT NULL) + (m.venmo IS NOT NULL) + (m.cash_app IS NOT NULL) DESC
+         LIMIT 1`
+      ).get(s.token);
+      const u = stmt<{ phone: string | null; venmo: string | null; cash_app: string | null }, [string]>(
+        "SELECT phone, venmo, cash_app FROM users WHERE email = ?"
+      ).get(email);
+      const pairs: string[] = [], vals: (string | null)[] = [];
+      if (m) {
+        if (!u?.phone && m.phone) { pairs.push("phone = ?"); vals.push(m.phone); }
+        if (!u?.venmo && m.venmo) { pairs.push("venmo = ?"); vals.push(m.venmo); }
+        if (!u?.cash_app && m.cash_app) { pairs.push("cash_app = ?"); vals.push(m.cash_app); }
+      }
+      if (pairs.length)
+        db.run(`UPDATE users SET ${pairs.join(", ")} WHERE email = ?`, [...vals, email]);
       return db.query<{ trip_token: string }, [string]>(
         "SELECT trip_token FROM claims WHERE session_token = ?",
       ).all(s.token);
@@ -189,7 +254,7 @@ const routes: Route[] = [
         trip_currency: t.trip_currency, settle_currency: t.settle_currency,
         has_password: !!t.password_hash, password: o.edit ? t.password_text : null, fun_leaderboard: !!t.fun_leaderboard,
       },
-      me: me ? { id: me.id, name: me.name, linked: !!me.user_sub, opted_out_fun: !!me.opted_out_fun } : null,
+      me: me ? { id: me.id, name: me.name, linked: !!me.user_sub, opted_out_fun: !!me.opted_out_fun, payment: paymentOfMember(me) } : null,
       access: o.edit ? "edit" : "view",
       signed_in: !!s.user_sub,
       is_creator: t.created_by_token !== null && t.created_by_token === s.token,
@@ -198,6 +263,7 @@ const routes: Route[] = [
         id: mm.id, name: mm.name, linked: !!mm.user_sub,
         used: memberIsUsed(t.token, mm.id), opted_out_fun: !!mm.opted_out_fun,
         is_me: me?.id === mm.id,
+        payment: paymentOfMember(mm),
       })),
       balances: pairs,
       journey: (() => {
@@ -387,11 +453,33 @@ const routes: Route[] = [
       const me = o.me;
       if (!me || me.id !== mem.id) return err(403, "not_your_member");
     }
+    const p = body.payment as { phone?: unknown; venmo?: unknown; cash_app?: unknown } | undefined;
+    if (p) {
+      const me = o.me;
+      if (!me || me.id !== mem.id) return err(403, "not_your_member");
+    }
     return mutateTrip(mem.trip_token, () => {
       if (body.name !== undefined)
         db.run("UPDATE members SET name = ? WHERE id = ?", [String(body.name).trim(), mem.id]);
       if (body.opted_out_fun !== undefined)
         db.run("UPDATE members SET opted_out_fun = ? WHERE id = ?", [body.opted_out_fun ? 1 : 0, mem.id]);
+      if (p) {
+        const pairs: string[] = [], vals: (string | null)[] = [];
+        for (const [col, v] of [["phone", p.phone], ["venmo", p.venmo], ["cash_app", p.cash_app]] as const) {
+          if (v === undefined) continue;
+          const val = v === null ? null : String(v).trim() || null;
+          pairs.push(`${col} = ?`); vals.push(val);
+        }
+        if (pairs.length) {
+          // Linked member: write to the account (shared across trips). Unlinked:
+          // write to their own row (per trip).
+          if (mem.user_sub) {
+            db.run(`UPDATE users SET ${pairs.join(", ")} WHERE email = ?`, [...vals, mem.user_sub]);
+          } else {
+            db.run(`UPDATE members SET ${pairs.join(", ")} WHERE id = ?`, [...vals, mem.id]);
+          }
+        }
+      }
       return json({ ok: true });
     });
   }],
@@ -941,7 +1029,7 @@ const routes: Route[] = [
         expenses: tr.expenses.map((e) => expensePayload(tr, e, false)),
       })),
       persons: [...persons.entries()].map(([k, p]) => ({ key: k, ...p })),
-      members: allM.map((mm) => ({ id: mm.id, name: mm.name, trip_name: mm.trip_name, key: keyOf(mm), linked: !!mm.user_sub, opted_out_fun: !!mm.opted_out_fun })),
+      members: allM.map((mm) => ({ id: mm.id, name: mm.name, trip_name: mm.trip_name, key: keyOf(mm), linked: !!mm.user_sub, opted_out_fun: !!mm.opted_out_fun, payment: paymentOfMember(mm) })),
       mergeHints: hints,
       // member ids belonging to this session, so the client can tell
       // "who owes you" from "who you owe" inside shared transfers

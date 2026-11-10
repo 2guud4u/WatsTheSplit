@@ -39,7 +39,10 @@ CREATE TABLE IF NOT EXISTS users (
   -- email is the identity (email-code sign-in); google_sub kept for old rows
   email      TEXT PRIMARY KEY,
   google_sub TEXT,
-  name       TEXT
+  name       TEXT,
+  phone      TEXT,
+  venmo      TEXT,
+  cash_app   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS email_codes (
@@ -75,6 +78,11 @@ CREATE TABLE IF NOT EXISTS members (
   name       TEXT NOT NULL,
   user_sub   TEXT REFERENCES users(google_sub),
   created_at TEXT NOT NULL,
+  -- Per-trip Payment Method for unlinked members (no account to adopt).
+  -- Linked members read their account's payment instead.
+  phone      TEXT,
+  venmo      TEXT,
+  cash_app   TEXT,
   UNIQUE(trip_token, user_sub)
 );
 
@@ -315,6 +323,23 @@ try {
   }
 } finally {
   db.exec("PRAGMA foreign_keys = ON;");
+}
+
+// migrate: users table gains Payment Method columns (phone, venmo, cash_app)
+// for a fresh account's "how to pay me" info.
+// col is from a fixed const list — safe to interpolate.
+for (const col of ["phone", "venmo", "cash_app"] as const) {
+  if (!db.query(`SELECT 1 FROM pragma_table_info('users') WHERE name='${col}'`).get()) {
+    db.exec(`ALTER TABLE users ADD COLUMN ${col} TEXT`);
+  }
+}
+
+// migrate: members table gains Payment Method columns (phone, venmo, cash_app)
+// for an unlinked member's per-trip "how to pay me" info.
+for (const col of ["phone", "venmo", "cash_app"] as const) {
+  if (!db.query(`SELECT 1 FROM pragma_table_info('members') WHERE name='${col}'`).get()) {
+    db.exec(`ALTER TABLE members ADD COLUMN ${col} TEXT`);
+  }
 }
 
 _db = db;

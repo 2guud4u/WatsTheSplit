@@ -113,6 +113,10 @@ _Avoid_: Debt, total owed
 A recorded payment from one Member to another that reduces their Balance.
 _Avoid_: Settle-up, repayment, transfer
 
+**Payment Method**:
+A Member's "how to pay me" — a set of optional ways (phone number, Venmo handle, Cash App) that others in the trip use to send a Settlement. Anyone can set it without signing in. A Linked Member's lives on their signed-in account, shared across every trip they join; an Unlinked Member's lives on their own Member, per trip, and is promoted to the account when they sign in.
+_Avoid_: Payment info, contact, Venmo, bank info, pay me
+
 ## Wrapped
 
 **Trip Wrapped**:

@@ -8,7 +8,7 @@ export type ErrorCode =
   | "bad_email" | "too_many_codes" | "send_failed"
   | "no_code" | "code_expired" | "too_many_attempts" | "wrong_code"
   // access gates (access.ts) — 401 password_required, 403 no_access
-  | "password_required" | "password_empty" | "wrong_password" | "no_access" | "no_trip_access"
+  | "password_required" | "password_empty" | "wrong_password" | "no_access" | "no_trip_access" | "not_signed_in"
   | "only_creator" | "member_linked" | "not_your_member" | "payer_only"
   | "payer_or_self_only" | "end_date_required"
   // validation
@@ -29,7 +29,13 @@ export type Ok = { ok: true };
 // ---------- session ----------
 
 export type Config = { baseUrl: string; currencies: string[] };
-export type Me = { user: { email: string; name: string | null } | null };
+export type Me = {
+  user: {
+    email: string; name: string | null;
+    payment: PaymentMethod;
+  } | null;
+};
+export type PaymentMethod = { phone: string | null; venmo: string | null; cash_app: string | null };
 export type TripSummary = { token: string; name: string; trip_currency: string; settle_currency: string };
 export type JourneySummary = { token: string; name: string; settle_currency: string };
 export type AccessibleTrip = TripSummary & { journey: JourneySummary | null };
@@ -57,8 +63,9 @@ export type TripReview = {
 export type TripMember = {
   id: string; name: string; linked: boolean; used: boolean;
   is_me: boolean; opted_out_fun: boolean;
+  payment: PaymentMethod | null;
 };
-export type MeMember = { id: string; name: string; linked: boolean; opted_out_fun: boolean };
+export type MeMember = { id: string; name: string; linked: boolean; opted_out_fun: boolean; payment: PaymentMethod | null };
 
 export type ExpenseSum = {
   id: string; name: string; currency: string; total_minor: number;
@@ -169,6 +176,7 @@ export type Person = { key: string; name: string; memberIds: string[]; linked: b
 export type JourneyMemberRow = {
   id: string; name: string; trip_name: string; key: string;
   linked: boolean; opted_out_fun: boolean;
+  payment: PaymentMethod | null;
 };
 export type MergeHint = { name: string; member_ids: string[]; trips: string[] };
 export type TransferPart = {
@@ -220,6 +228,6 @@ export type NewItem = { name?: string; price_minor?: number; sharers?: string[] 
 export type SplitInput =
   | { type: "equal_rest"; member_ids?: string[] }
   | { type: "proportional" };
-export type MemberPatch = { name?: string; opted_out_fun?: boolean };
+export type MemberPatch = { name?: string; opted_out_fun?: boolean; payment?: PaymentMethod };
 export type NewJourney = { name: string; trip_tokens: string[] };
 export type JourneySettingsPatch = { name?: string; fun_leaderboard?: boolean };

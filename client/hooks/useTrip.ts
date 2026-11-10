@@ -60,6 +60,19 @@ export function useTrip(token: string) {
       load();
     },
     detailView: () => { api.call("POST /api/trips/:trip/detail-view", { trip: token }).catch(() => {}); },
+    // Save the current member's Payment Method. Linked members write to the
+    // account (shared across trips); unlinked members write to their own row
+    // (this trip). The caller never decides which — it just passes the values.
+    savePayment: async (payment: { phone: string | null; venmo: string | null; cash_app: string | null }) => {
+      const me = data?.me;
+      if (me?.linked) {
+        await api.call("PUT /api/me", { payment });
+      } else {
+        const memberId = me?.id;
+        if (memberId) await api.call("PATCH /api/members/:member", { member: memberId, payment });
+      }
+      load();
+    },
     createExpense: async (input: NewExpense) => {
       return api.call("POST /api/trips/:trip/expenses", { trip: token, ...input });
     },

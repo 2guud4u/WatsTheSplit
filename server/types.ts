@@ -1,6 +1,7 @@
 export type Session = { token: string; user_sub: string | null };
 export type Member = {
   id: string; trip_token: string; name: string; user_sub: string | null; opted_out_fun?: number; detail_views?: number;
+  phone?: string | null; venmo?: string | null; cash_app?: string | null;
 };
 export type Trip = {
   token: string; name: string; start_date: string | null; end_date: string | null;

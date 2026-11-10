@@ -1,6 +1,6 @@
 import type {
   AccessibleTrip, Award, Config, ErrorCode, ExpenseView, JourneyView,
-  MemberSuggestions, Me, MyJourneys, MyTrips, TripView, Ok,
+  MemberSuggestions, Me, MyJourneys, MyTrips, TripView, Ok, PaymentMethod,
   NewTrip, TripSettingsPatch, ClaimInput, NewExpense, ExpensePatch,
   NewSettlement, ItemPatch, NewItem, SplitInput, MemberPatch,
   NewJourney, JourneySettingsPatch, HistoryEntry,
@@ -64,6 +64,7 @@ const COPY: Partial<Record<ErrorCode | "network" | "bad_response", string>> = {
   payer_only: "Only the payer can mark this paid",
   payer_or_self_only: "Only the payer or that person can change this",
   not_your_member: "You can only change your own member",
+  not_signed_in: "Sign in first — how to pay you is tied to your account",
   network: "Can't reach the server — check your connection",
   bad_response: "Unexpected server response",
   trip_not_found: "Trip not found",
@@ -92,6 +93,7 @@ type JourneyGate = "journey_not_found" | "no_access";
 interface Routes {
   "GET /api/config":                 R<{}, Config>;
   "GET /api/me":                     R<{}, Me>;
+  "PUT /api/me":                    R<{ payment?: PaymentMethod }, Me, "not_signed_in">;
   "POST /api/auth/email":            R<{ email: string }, Ok, "bad_email" | "too_many_codes" | "send_failed">;
   "POST /api/auth/email/verify":     R<{ email: string; code: string }, Ok, "no_code" | "code_expired" | "too_many_attempts" | "wrong_code">;
   "POST /api/auth/signout":          R<{}, Ok>;
