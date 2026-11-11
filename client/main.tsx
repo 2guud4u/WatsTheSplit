@@ -39,11 +39,19 @@ function App() {
 
   const mTrip = /^\/t\/([A-Za-z0-9]+)$/.exec(path)
   const mExp = /^\/t\/([A-Za-z0-9]+)\/e\/([A-Za-z0-9-]+)$/.exec(path)
+  const mJExp = /^\/j\/([A-Za-z0-9]+)\/t\/([A-Za-z0-9]+)\/e\/([A-Za-z0-9-]+)$/.exec(path)
   const mJourney = /^\/j\/([A-Za-z0-9]+)$/.exec(path)
   return (
     <>
       <SnackRoot />
-      {mExp ? (
+      {mJExp ? (
+        <ExpenseView
+          key={mJExp[3] ?? ""}
+          token={mJExp[2] ?? ""}
+          expenseId={mJExp[3] ?? ""}
+          journeyToken={mJExp[1] ?? ""}
+        />
+      ) : mExp ? (
         <ExpenseView key={mExp[2] ?? ""} token={mExp[1] ?? ""} expenseId={mExp[2] ?? ""} />
       ) : mJourney ? (
         <JourneyView key={mJourney[1] ?? ""} token={mJourney[1] ?? ""} reloadMe={reloadMe} />

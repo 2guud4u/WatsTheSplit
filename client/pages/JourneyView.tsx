@@ -178,6 +178,8 @@ export default function JourneyView({ token, reloadMe }: { token: string; reload
           data={data}
           patchSettings={actions.patchSettings}
           dissolve={actions.dissolve}
+          savePayment={actions.savePayment}
+          reloadMe={reloadMe}
           setShow={setShowSettings}
         />
       )}

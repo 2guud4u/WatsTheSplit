@@ -74,6 +74,19 @@ export function useJourney(token: string) {
         to_member: p.to_member,
         amount_minor: minor,
       }),
+    // Save the Payment Method for every member this session has claimed.
+    // Linked (signed in) → one write to the account (shared across trips).
+    // Unlinked → one write per member, so each trip's member carries it.
+    // Mirrors the trip's savePayment, across all the journey's members.
+    savePayment: async (payment: { phone: string | null; venmo: string | null; cash_app: string | null }) => {
+      if (data?.signed_in) {
+        await api.call("PUT /api/me", { payment })
+      } else {
+        for (const id of data?.my_member_ids ?? [])
+          await api.call("PATCH /api/members/:member", { member: id, payment })
+      }
+      void load()
+    },
     patchSettings: async (patch: JourneySettingsPatch) => {
       await api.call("PATCH /api/journeys/:journey/settings", { journey: token, ...patch })
       void load()
@@ -98,6 +111,7 @@ export interface JourneyModel {
     claimByName: (tripToken: string, name: string) => Promise<void>
     optOutFunAll: (memberIds: string[]) => Promise<void>
     settlePart: (p: TransferPart, minor: number) => Promise<unknown>
+    savePayment: (payment: { phone: string | null; venmo: string | null; cash_app: string | null }) => Promise<void>
     patchSettings: (patch: JourneySettingsPatch) => Promise<void>
     dissolve: (name: string) => Promise<unknown>
   }

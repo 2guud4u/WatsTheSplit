@@ -6,17 +6,19 @@ import { useTripEvents } from "./useTripEvents.ts"
 // Expense screen model: fetches the ExpenseView, live-reloads off the trip's
 // event stream, and wraps every mutation the view can trigger. A failed fetch
 // means the expense is gone — the model bounces back to the trip, same as the
-// old view did.
-export function useExpense(token: string, expenseId: string) {
+// old view did. When the expense is opened from a journey (journeyToken set),
+// the fallback bounces back to that journey instead.
+export function useExpense(token: string, expenseId: string, journeyToken: string | null = null) {
   const [data, setData] = useState<ExpenseView | null>(null)
+  const fallbackHash = journeyToken ? `#/j/${journeyToken}` : `#/t/${token}`
 
   const load = useCallback(async () => {
     try {
       setData(await api.call("GET /api/expenses/:expense", { expense: expenseId }))
     } catch {
-      location.hash = `#/t/${token}`
+      location.hash = fallbackHash
     }
-  }, [expenseId, token])
+  }, [expenseId, fallbackHash])
 
   useEffect(() => {
     void load()

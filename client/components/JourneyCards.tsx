@@ -9,6 +9,7 @@ import { describeError } from "../services/api.ts"
 import { decimals, flag, fmt, fmtUnits } from "../utils/format.ts"
 import { PickChip, SelfChip } from "./Chips.tsx"
 import { OweDetailsModal } from "./OweDetailsModal.tsx"
+import { PaymentForm } from "./PaymentForm.tsx"
 
 // The "Trips" tab: every trip in the journey (its members, claim chips,
 // + new name) and the add-a-trip picker.
@@ -82,7 +83,7 @@ export function TripsTab({
                 <>
                   {shown.map((e) => (
                     <div key={e.id} className="expense-row">
-                      <a href={`#/t/${t.token}/e/${e.id}`}>{e.name}</a>
+                      <a href={`#/j/${data.journey.token}/t/${t.token}/e/${e.id}`}>{e.name}</a>
                       <span>
                         {fmt(e.total_minor, e.currency)}
                         {e.unassigned_minor > 0 && !e.over && (
@@ -338,16 +339,29 @@ export function JourneySettings({
   data,
   patchSettings,
   dissolve,
+  savePayment,
+  reloadMe,
   setShow,
 }: {
   data: JourneyData
   patchSettings: (p: JourneySettingsPatch) => Promise<void>
   dissolve: (name: string) => Promise<unknown>
+  savePayment: (p: { phone: string | null; venmo: string | null; cash_app: string | null }) => Promise<void>
+  reloadMe: () => void
   setShow: (b: boolean) => void
 }) {
   const j = data.journey
   const [delName, setDelName] = useState("")
   const [funErr, setFunErr] = useState("")
+  // This session's own members (one per trip). The Payment Method is per Member,
+  // so we merge (union) the non-empty fields across them to show one value;
+  // saving writes to all of them.
+  const myMembers = data.members.filter((m) => data.my_member_ids.includes(m.id))
+  const initial = {
+    phone: myMembers.find((m) => m.payment?.phone)?.payment?.phone ?? null,
+    venmo: myMembers.find((m) => m.payment?.venmo)?.payment?.venmo ?? null,
+    cash_app: myMembers.find((m) => m.payment?.cash_app)?.payment?.cash_app ?? null,
+  }
   return (
     <div className="card">
       <h2 style={{ marginTop: 0 }}>Settings</h2>
@@ -392,6 +406,14 @@ export function JourneySettings({
           <p className="error" style={{ margin: "6px 0 0" }}>
             {funErr}
           </p>
+        )}
+      </div>
+      <div className="field">
+        <label className="field-label">How to pay you</label>
+        {myMembers.length > 0 ? (
+          <PaymentForm initial={initial} onSaved={() => reloadMe()} onSave={(p) => savePayment(p)} />
+        ) : (
+          <p className="muted">Pick your name first, then add how to pay you.</p>
         )}
       </div>
       <div className="field">

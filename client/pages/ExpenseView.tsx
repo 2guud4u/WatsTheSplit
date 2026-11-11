@@ -76,13 +76,36 @@ function PieLegend({
   )
 }
 
-export default function ExpenseView({ token, expenseId }: { token: string; expenseId: string }) {
-  const { data, load, actions } = useExpense(token, expenseId)
+export default function ExpenseView({
+  token,
+  expenseId,
+  journeyToken,
+}: {
+  token: string
+  expenseId: string
+  journeyToken?: string
+}) {
+  const { data, load, actions } = useExpense(token, expenseId, journeyToken ?? null)
   const [itemDraft, setItemDraft] = useState({ name: "", price: "", sharers: [] as string[] })
+  const [journeyName, setJourneyName] = useState("")
+
+  // When opened from a journey, the back link points to the journey — fetch its
+  // name for the label (the expense payload only carries the trip, not the
+  // journey).
+  useEffect(() => {
+    if (!journeyToken) return
+    void api
+      .call("GET /api/journeys/:journey", { journey: journeyToken })
+      .then((j) => setJourneyName(j.journey.name))
+      .catch(() => setJourneyName("journey"))
+  }, [journeyToken])
+
+  const backHash = journeyToken ? `#/j/${journeyToken}` : `#/t/${token}`
 
   if (!data) return <p className="muted">Loading…</p>
   const e = data.expense
   const t = data.trip
+  const back = journeyToken ? { href: backHash, label: journeyName || "journey" } : { href: backHash, label: t.name }
   const dec = decimals(e.currency)
   const partIds = new Set((e.participants ?? []).map((p) => p.member_id))
   const readOnly = data.access === "view"
@@ -104,7 +127,7 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
             {e.name}
           </>
         }
-        back={{ href: `#/t/${token}`, label: t.name }}
+        back={back}
       />
       <div className="row" style={{ margin: "4px 0 12px" }}>
         {e.paid_out ? <span className="badge badge-done">✓ paid out — shares don't count toward balances</span> : null}
@@ -450,7 +473,7 @@ export default function ExpenseView({ token, expenseId }: { token: string; expen
           onClick={async () => {
             if (!confirm(`Delete "${e.name}"? This cannot be undone.`)) return
             await actions.destroy()
-            location.hash = `#/t/${token}`
+            location.hash = backHash
           }}
         >
           Delete expense
