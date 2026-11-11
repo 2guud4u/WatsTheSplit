@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { rememberedTab, rememberTab } from "../utils/tabMemory.ts";
+import { useEffect, useState } from "react"
+import { rememberedTab, rememberTab } from "../utils/tabMemory.ts"
 
 // The last-selected tab per screen (keyed by token), session-only, plus a
 // fallback: a remembered "fun" tab is shown, but a remembered "fun" falls back
@@ -10,13 +10,16 @@ export function useTabMemory<T extends string>(
   token: string,
   valid: readonly T[],
   fallback: T,
-  funLive?: boolean,
+  funLive?: boolean
 ): { tab: T; setTab: (t: T) => void } {
-  const [rawTab, setRawTabState] = useState<T>(() =>
-    rememberedTab(token, valid, fallback));
-  const tab = funLive !== undefined && rawTab === "fun" && !funLive
-    ? fallback : rawTab;
-  const setTab = (t: T) => { rememberTab(token, t); setRawTabState(t); };
-  useEffect(() => { rememberTab(token, tab); }, [token, tab]);
-  return { tab, setTab };
+  const [rawTab, setRawTabState] = useState<T>(() => rememberedTab(token, valid, fallback))
+  const tab = funLive !== undefined && rawTab === "fun" && !funLive ? fallback : rawTab
+  const setTab = (t: T) => {
+    rememberTab(token, t)
+    setRawTabState(t)
+  }
+  useEffect(() => {
+    rememberTab(token, tab)
+  }, [token, tab])
+  return { tab, setTab }
 }

@@ -10,7 +10,7 @@ services:
       - "127.0.0.1:8081:8081"
       - "100.127.5.96:8081:8081"
       - "192.168.8.208:8081:8081"
-    env_file: .env            # BASE_URL / GOOGLE_CLIENT_ID / OXR_APP_ID (gitignored)
+    env_file: .env # BASE_URL / GOOGLE_CLIENT_ID / OXR_APP_ID (gitignored)
     user: "1000:1000"
     environment:
       - PORT=8081
@@ -42,7 +42,7 @@ services:
     image: cloudflare/cloudflared:2026.9.3
     container_name: wts-tunnel
     command: tunnel --no-autoupdate run
-    env_file: .env            # TUNNEL_TOKEN=... (chmod 600, gitignored)
+    env_file: .env # TUNNEL_TOKEN=... (chmod 600, gitignored)
     depends_on: [wts]
     restart: unless-stopped
     read_only: true

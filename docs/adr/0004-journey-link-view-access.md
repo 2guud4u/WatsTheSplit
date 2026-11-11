@@ -1,6 +1,7 @@
 # Journey links grant read access to member trips
 
 ## Status
+
 accepted
 
 ## Context

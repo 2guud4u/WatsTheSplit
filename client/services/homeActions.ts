@@ -1,6 +1,6 @@
-import { api } from "./api.ts";
-import type { AccessibleTrip, NewTrip, NewJourney, TripSummary, JourneySummary } from "./api.ts";
-import { addRecent } from "../utils/types.ts";
+import { addRecent } from "../utils/types.ts"
+import type { AccessibleTrip, JourneySummary, NewJourney, NewTrip, TripSummary } from "./api.ts"
+import { api } from "./api.ts"
 
 // Home screen model: the create-trip / create-journey / sign-out calls plus the
 // suggestion + my-trips fetches the view's panels need. Fetch errors surface as
@@ -12,12 +12,12 @@ export const homeActions = {
   myJourneys: () => api.call("GET /api/my-journeys", {}),
   myTrips: () => api.call("GET /api/my-trips", {}),
   createTrip: async (input: NewTrip) => {
-    const r = await api.call("POST /api/trips", input);
-    addRecent(r.token, input.name);
-    return r;
+    const r = await api.call("POST /api/trips", input)
+    addRecent(r.token, input.name)
+    return r
   },
   createJourney: (input: NewJourney) => api.call("POST /api/journeys", input),
   signOut: () => api.call("POST /api/auth/signout", {}),
-};
+}
 
-export type { AccessibleTrip, TripSummary, JourneySummary };
+export type { AccessibleTrip, JourneySummary, TripSummary }

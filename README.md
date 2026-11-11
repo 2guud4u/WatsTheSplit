@@ -21,14 +21,14 @@ Demo trip: a seeded trip with token `demo` and password `demo` (THB, settles in 
 
 ## Environment variables
 
-| Var | Purpose |
-|---|---|
-| `OXR_APP_ID` | Open Exchange Rates App ID (free tier: hourly, USD base, 1,000 req/mo). Without it, rates stay `unavailable` and expenses still work. |
-| `RESEND_API_KEY` | Resend API key for sign-in emails. Without it, codes are printed to the server log (dev mode) — sign-in still works locally. |
-| `EMAIL_FROM` | Sender for sign-in emails (default `WatsTheSplit <onboarding@resend.dev>`; use a verified domain in production). |
-| `BASE_URL` | Public origin used in invite links (default `http://localhost:PORT`). |
-| `PORT` | Listen port (default 3000). |
-| `DB_PATH` | SQLite file (default `data.db`). |
+| Var              | Purpose                                                                                                                               |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `OXR_APP_ID`     | Open Exchange Rates App ID (free tier: hourly, USD base, 1,000 req/mo). Without it, rates stay `unavailable` and expenses still work. |
+| `RESEND_API_KEY` | Resend API key for sign-in emails. Without it, codes are printed to the server log (dev mode) — sign-in still works locally.          |
+| `EMAIL_FROM`     | Sender for sign-in emails (default `WatsTheSplit <onboarding@resend.dev>`; use a verified domain in production).                      |
+| `BASE_URL`       | Public origin used in invite links (default `http://localhost:PORT`).                                                                 |
+| `PORT`           | Listen port (default 3000).                                                                                                           |
+| `DB_PATH`        | SQLite file (default `data.db`).                                                                                                      |
 
 ## Deploying on your server
 

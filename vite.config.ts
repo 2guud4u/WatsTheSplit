@@ -1,5 +1,5 @@
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
+import react from "@vitejs/plugin-react"
+import { defineConfig } from "vite"
 
 // VITE_BASE sets the deploy subpath (e.g. "/watsthesplit/" on jiathe.dev).
 // Dev defaults to "/" so localhost URLs stay short.
@@ -12,4 +12,4 @@ export default defineConfig({
   build: {
     outDir: "dist",
   },
-});
+})

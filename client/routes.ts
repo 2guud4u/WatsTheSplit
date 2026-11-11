@@ -1,1 +1,1 @@
-export const route = () => location.hash.slice(1).split("?")[0] || "/";
+export const route = () => location.hash.slice(1).split("?")[0] || "/"

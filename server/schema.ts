@@ -1,4 +1,4 @@
-import type { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite"
 
 // The database schema: create the full table set if it doesn't exist (the
 // idempotent `CREATE TABLE IF NOT EXISTS` form is what keeps re-running
@@ -152,5 +152,5 @@ CREATE TABLE IF NOT EXISTS fx_latest (
   provider_timestamp TEXT NOT NULL,
   fetched_at        TEXT NOT NULL
 );
-`);
+`)
 }
