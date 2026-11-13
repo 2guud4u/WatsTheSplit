@@ -218,6 +218,7 @@ export function tripBalances(rows: TripRows) {
         rate,
         converted: units,
       })
+      log[key] = logArr
     }
   }
   for (const s of rows.settlements) {
@@ -229,6 +230,7 @@ export function tripBalances(rows: TripRows) {
       label: "paid",
       amount_minor: -s.amount_minor,
     })
+    log[key] = logArr2
   }
   // net pairwise
   const pairs: { from: string; to: string; amount: number }[] = []
